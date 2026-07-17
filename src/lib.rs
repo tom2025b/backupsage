@@ -1,0 +1,9 @@
+//! BackupSage — index and search text inside tar backups without extracting them.
+//!
+//! Split into a library so the pipeline is testable; `main.rs` only parses
+//! arguments and renders output.
+
+pub mod cli;
+pub mod format;
+pub mod indexer;
+pub mod searcher;
