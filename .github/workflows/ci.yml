@@ -22,3 +22,7 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Format
+        run: cargo fmt --check

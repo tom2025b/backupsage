@@ -1,493 +1,486 @@
-// ─── src/indexer.rs ───────────────────────────────────────────────────────────
-//
-// PURPOSE: Stream a .tar.zst archive entry-by-entry without extracting it to
-// disk. For each entry, extract text content (skipping binary files), tokenise
-// words from filenames and content, and write everything into a SQLite FTS5
-// (Full-Text Search 5) virtual table for fast keyword lookups.
-//
-// DESIGN: We chain I/O adapters like pipes:
-//
-//   File  →  zstd::Decoder  →  tar::Archive  →  per-entry Read
-//
-// At no point do we buffer the entire archive in RAM.
-// ─────────────────────────────────────────────────────────────────────────────
+//! Streams a tar archive (plain, gzip or zstd) entry-by-entry and indexes
+//! text content into SQLite FTS5, without extracting anything to disk.
+//!
+//! Reader chain: File → progress tracker → BufReader → decompressor → tar.
+//! Each entry is read once into a single capped buffer and converted to UTF-8
+//! in one pass — v0.1 converted fixed-size chunks separately, which corrupted
+//! multi-byte characters straddling chunk boundaries and made those words
+//! unsearchable.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::{params, Connection};
 
-// How many bytes we read at once per archive entry when scanning content.
-// 64 KiB is a sweet spot: small enough to keep RAM usage flat, large enough
-// that we don't make thousands of tiny syscalls per file.
-const READ_CHUNK: usize = 64 * 1024;
+use crate::format::{self, Format};
 
-// How many bytes we sample from the start of each file to detect binary data.
-// 8 KiB is what the `file` utility and git use — enough to be confident.
+/// Bytes sampled from the start of each file for the null-byte binary check
+/// (the same heuristic git and file(1) use).
 const BINARY_PROBE: usize = 8 * 1024;
 
-// How many SQLite INSERT statements we batch before committing.
-// Committing every row is ~1000× slower than batching.
+/// Archive entries per SQLite transaction. One commit per entry would fsync
+/// per row and be orders of magnitude slower.
 const BATCH_SIZE: usize = 500;
 
-// ── Public entry point ────────────────────────────────────────────────────────
+/// Flush the in-memory word-frequency map to SQLite once it holds this many
+/// distinct words, bounding memory on archives with huge vocabularies.
+const WORD_FLUSH_THRESHOLD: usize = 100_000;
 
-/// Open the archive at `archive_path`, index all text content into `db_path`.
-///
-/// If `db_path` already exists it is deleted first — no resume logic.
-/// This function streams the archive; it never writes temp files to disk.
-pub fn run_index(archive_path: &Path, db_path: &PathBuf) -> Result<()> {
-    // ── Step 1: Resolve the database path ────────────────────────────────────
-    // If the user didn't provide --index, derive it from the archive name.
-    // If the archive's parent directory is not writable, fall back to CWD.
-    let db_path = resolve_db_path(archive_path, db_path)?;
+/// Tokens outside this length range (in characters) are excluded from word
+/// statistics. FTS5 indexes them regardless, so search is unaffected — this
+/// only keeps `top` output and the word_freq table sane.
+const MIN_WORD_CHARS: usize = 3;
+const MAX_WORD_CHARS: usize = 32;
 
-    // Wipe any existing index so we start clean.
-    if db_path.exists() {
-        fs::remove_file(&db_path)
-            .with_context(|| format!("Failed to remove existing index: {}", db_path.display()))?;
-        println!("Removed old index at {}", db_path.display());
+pub const DEFAULT_MAX_FILE_SIZE: u64 = 16 * 1024 * 1024;
+const SCHEMA_VERSION: &str = "2";
+
+pub struct IndexOptions {
+    /// Per-file content cap in bytes; content beyond it is not indexed.
+    pub max_file_size: u64,
+    /// Whether to maintain the word_freq table used by `top`.
+    pub word_stats: bool,
+}
+
+impl Default for IndexOptions {
+    fn default() -> Self {
+        IndexOptions {
+            max_file_size: DEFAULT_MAX_FILE_SIZE,
+            word_stats: true,
+        }
     }
+}
 
-    println!("Archive : {}", archive_path.display());
+#[derive(Debug, Default)]
+pub struct IndexSummary {
+    pub db_path: PathBuf,
+    pub format: String,
+    pub files_indexed: u64,
+    pub files_skipped_binary: u64,
+    pub files_truncated: u64,
+    /// Hard links and symlinks, indexed by name only.
+    pub files_link_names: u64,
+}
+
+// ── Public entry point ───────────────────────────────────────────────────────
+
+/// Index the archive at `archive_path` into a fresh SQLite database.
+///
+/// Any existing database at the target path is replaced. Prints a progress
+/// bar and per-entry warnings; returns the totals.
+pub fn run_index(
+    archive_path: &Path,
+    explicit_db: Option<&Path>,
+    opts: &IndexOptions,
+) -> Result<IndexSummary> {
+    let fmt = format::detect_file(archive_path)?;
+    let db_path = resolve_db_path(archive_path, explicit_db);
+
+    let (conn, db_path) = match create_database(&db_path, archive_path, opts) {
+        Ok(conn) => (conn, db_path),
+        // Default location not writable (e.g. archive on a read-only mount):
+        // fall back to the current directory, keeping the per-archive name.
+        Err(e) if explicit_db.is_none() => {
+            let fallback = PathBuf::from(db_file_name(archive_path));
+            eprintln!(
+                "warning: cannot create index at '{}' ({e:#}) — using './{}'",
+                db_path.display(),
+                fallback.display()
+            );
+            let conn = create_database(&fallback, archive_path, opts)?;
+            (conn, fallback)
+        }
+        Err(e) => return Err(e),
+    };
+
+    println!("Archive : {} ({fmt})", archive_path.display());
     println!("Index   : {}", db_path.display());
     println!();
 
-    // ── Step 2: Open the archive for streaming ────────────────────────────────
-    // `File::open` returns an `io::Read` backed by the OS file descriptor.
     let archive_file = File::open(archive_path)
-        .with_context(|| format!("Cannot open archive: {}", archive_path.display()))?;
+        .with_context(|| format!("cannot open archive: {}", archive_path.display()))?;
+    let total_bytes = archive_file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // `archive_file.metadata()` gives us the compressed byte count, which
-    // we use to drive the progress bar. We measure compressed bytes read,
-    // not uncompressed — that's what `pb.wrap_read` tracks.
-    let total_bytes = archive_file
-        .metadata()
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    // Wrap in BufReader to reduce per-byte syscall overhead.
-    let buffered_file = BufReader::new(archive_file);
-
-    // ── Step 3: Set up progress bar ───────────────────────────────────────────
-    // `ProgressBar::new(total_bytes)` creates a bar that tracks bytes processed.
+    // The progress bar tracks compressed bytes consumed from the file.
     let pb = ProgressBar::new(total_bytes);
     pb.set_style(
         ProgressStyle::with_template(
             "{spinner:.cyan} [{elapsed_precise}] [{bar:45.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta}) — {msg}",
         )
-        // `?` means fallback silently if the template has an error.
         .unwrap_or_else(|_| ProgressStyle::default_bar())
-        // Smooth the bytes-per-second estimate over a rolling window.
         .progress_chars("=>-"),
     );
 
-    // `pb.wrap_read(reader)` wraps any `io::Read` so every `read()` call
-    // automatically advances the progress bar by the bytes consumed.
-    let tracked_reader = pb.wrap_read(buffered_file);
+    let tracked = BufReader::with_capacity(256 * 1024, pb.wrap_read(archive_file));
+    let reader: Box<dyn Read> = match fmt {
+        // `with_buffer` reuses our BufReader instead of stacking another one.
+        Format::Zstd => Box::new(
+            zstd::Decoder::with_buffer(tracked).context("failed to initialise zstd decoder")?,
+        ),
+        // MultiGzDecoder also handles concatenated gzip members (pigz etc.).
+        Format::Gzip => Box::new(flate2::read::MultiGzDecoder::new(tracked)),
+        Format::PlainTar => Box::new(tracked),
+    };
+    let mut tar_archive = tar::Archive::new(reader);
 
-    // Layer zstd decompression on top of the tracked (compressed) reader.
-    // `zstd::Decoder` implements `io::Read` — it decompresses on the fly.
-    let zstd_reader = zstd::Decoder::new(tracked_reader)
-        .context("Failed to initialise zstd decoder (is the file a valid .zst?)")?;
+    let mut summary = IndexSummary {
+        db_path: db_path.clone(),
+        format: fmt.to_string(),
+        ..IndexSummary::default()
+    };
+    // word → (total occurrences, number of docs), flushed periodically.
+    let mut word_buf: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut in_batch = 0usize;
+    let mut entry_no = 0u64;
 
-    // Layer the TAR parser on top of the decompressed byte stream.
-    // `tar::Archive` also implements entry iteration without full buffering.
-    let mut tar_archive = tar::Archive::new(zstd_reader);
-
-    // ── Step 4: Open SQLite and create the FTS5 schema ───────────────────────
-    let conn = setup_database(&db_path)?;
-
-    // ── Step 5: Iterate entries ───────────────────────────────────────────────
-    // `entries()` returns an iterator of `tar::Entry` — each has a path and
-    // implements `io::Read` for its content.
-    let mut entries = tar_archive
-        .entries()
-        .context("Failed to read tar entries")?;
-
-    let mut files_indexed: u64 = 0;
-    let mut files_skipped: u64 = 0;
-    let mut batch_count = 0;
-
-    // Start a transaction. We'll commit every BATCH_SIZE inserts.
-    // Explicit transactions are 100–1000× faster than auto-commit per insert.
     conn.execute_batch("BEGIN")?;
 
-    while let Some(entry_result) = entries.next() {
-        // Some entries in a tar may be unreadable (corrupted header etc.).
-        // `with_context` attaches a human-readable error message if unwrap fails.
-        let mut entry = match entry_result {
-            Ok(e) => e,
-            Err(e) => {
-                pb.suspend(|| eprintln!("Warning: skipped unreadable entry: {e}"));
-                continue;
-            }
-        };
+    for entry_result in tar_archive
+        .entries()
+        .context("failed to read tar entries")?
+    {
+        // A corrupt entry header is fatal: tar's iterator cannot resync past
+        // it and permanently returns None afterwards, so "skip and continue"
+        // would silently drop the rest of the archive and still report
+        // success. Bail instead — completed stays 0, so searches on the
+        // partial database warn.
+        let mut entry = entry_result.with_context(|| {
+            format!(
+                "corrupt tar entry after {entry_no} readable entries — \
+                 the index is incomplete"
+            )
+        })?;
 
-        // Get the entry's path as a UTF-8 string.
-        // `entry.path()` returns a Cow<Path>; we convert to String for storage.
+        let entry_type = entry.header().entry_type();
+        // Content lives in regular files (plus GNU sparse/contiguous
+        // variants). Hard links and symlinks are alternate names for content
+        // stored elsewhere — index the name so it is at least findable.
+        let content_entry = entry_type.is_file()
+            || matches!(
+                entry_type,
+                tar::EntryType::GNUSparse | tar::EntryType::Continuous
+            );
+        let name_only_entry = matches!(entry_type, tar::EntryType::Link | tar::EntryType::Symlink);
+        if !content_entry && !name_only_entry {
+            continue; // directories, device nodes, fifos, pax metadata
+        }
+
         let entry_path = entry
             .path()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "<non-utf8-path>".to_string());
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| String::from("<unreadable-path>"));
 
-        // Update the spinner message with the current filename (truncated).
-        let display_name = truncate_path(&entry_path, 50);
-        pb.set_message(display_name);
-
-        // Only index regular files — skip directories, symlinks, device nodes.
-        // `is_file()` checks the tar entry type header, not the filesystem.
-        if !entry.header().entry_type().is_file() {
-            continue;
+        entry_no += 1;
+        if entry_no % 64 == 1 {
+            pb.set_message(truncate_path(&entry_path, 50));
         }
 
-        // ── Read a probe chunk to detect binary content ───────────────────────
-        // We read the first BINARY_PROBE bytes into a small buffer, check for
-        // binary data, then prepend that buffer back for full content indexing.
-        let mut probe = Vec::with_capacity(BINARY_PROBE);
-        // `take(n)` limits how many bytes `read_to_end` will consume here.
-        entry
-            .by_ref()
-            .take(BINARY_PROBE as u64)
-            .read_to_end(&mut probe)
-            .unwrap_or(0); // On read error, treat probe as empty (index name only).
-
-        if is_binary(&probe) {
-            files_skipped += 1;
-            // Still index the filename — just no content.
-            index_entry(&conn, &entry_path, "")?;
+        if name_only_entry {
+            insert_file(&conn, &entry_path, "")?;
+            summary.files_link_names += 1;
         } else {
-            // The probe is valid text. Now read the REST of the entry's content.
-            // We chain probe bytes + remaining bytes using `io::Cursor` + `chain`.
-            let mut content = String::from_utf8_lossy(&probe).into_owned();
-
-            // Read remaining content in chunks to keep memory flat.
-            let mut chunk = vec![0u8; READ_CHUNK];
-            loop {
-                match entry.read(&mut chunk) {
-                    Ok(0) => break,           // End of this entry.
-                    Ok(n) => {
-                        // `from_utf8_lossy` replaces invalid UTF-8 sequences with
-                        // the Unicode replacement character U+FFFD rather than
-                        // panicking. This handles Latin-1, Windows-1252, etc.
-                        let text = String::from_utf8_lossy(&chunk[..n]);
-                        content.push_str(&text);
-                    }
-                    Err(e) => {
-                        pb.suspend(|| {
-                            eprintln!("Warning: read error in '{entry_path}': {e}")
-                        });
-                        break;
-                    }
-                }
+            // Read once, up to the cap. The tar header knows the entry size,
+            // but don't trust it for preallocation — a corrupt header could
+            // claim petabytes.
+            let size = entry.size();
+            let to_read = size.min(opts.max_file_size);
+            let mut buf = Vec::with_capacity(to_read.min(1024 * 1024) as usize);
+            if let Err(e) = entry.by_ref().take(to_read).read_to_end(&mut buf) {
+                pb.suspend(|| eprintln!("warning: read error in '{entry_path}': {e}"));
+                buf.clear(); // fall through and index the file name at least
+            }
+            if size > opts.max_file_size {
+                summary.files_truncated += 1;
             }
 
-            index_entry(&conn, &entry_path, &content)?;
-            files_indexed += 1;
+            if is_binary(&buf[..buf.len().min(BINARY_PROBE)]) {
+                insert_file(&conn, &entry_path, "")?; // name only
+                summary.files_skipped_binary += 1;
+            } else {
+                // One lossy conversion over the whole buffer: multi-byte
+                // chars can no longer be split across read boundaries.
+                let mut content = String::from_utf8_lossy(&buf);
+                // 0x01 is the search-time highlight marker; strip it so
+                // per-file match counts cannot be inflated by files that
+                // happen to contain it.
+                if content.contains('\u{1}') {
+                    content = content.replace('\u{1}', "").into();
+                }
+                insert_file(&conn, &entry_path, &content)?;
+                if opts.word_stats {
+                    accumulate_words(&content, &mut word_buf);
+                    if word_buf.len() >= WORD_FLUSH_THRESHOLD {
+                        flush_word_stats(&conn, &mut word_buf)?;
+                    }
+                }
+                summary.files_indexed += 1;
+            }
         }
 
-        // Commit in batches to balance write throughput vs. memory usage.
-        batch_count += 1;
-        if batch_count >= BATCH_SIZE {
+        in_batch += 1;
+        if in_batch >= BATCH_SIZE {
             conn.execute_batch("COMMIT; BEGIN")?;
-            batch_count = 0;
+            in_batch = 0;
         }
     }
 
-    // Final commit for any remaining rows.
+    flush_word_stats(&conn, &mut word_buf)?;
+    // Created only now: building it during the load would make every
+    // word_freq upsert also rebalance this b-tree.
+    conn.execute_batch("CREATE INDEX idx_word_freq_total ON word_freq(total_count DESC)")?;
+    mark_complete(&conn, &summary)?;
     conn.execute_batch("COMMIT")?;
+    // Fold the WAL back into the main file so the finished index is a single
+    // file that can live on (and be opened read-only from) any medium.
+    conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA optimize;")?;
 
     pb.finish_with_message("done");
-
-    println!();
-    println!(
-        "Indexed  : {files_indexed} text files"
-    );
-    println!(
-        "Skipped  : {files_skipped} binary files"
-    );
-    println!(
-        "Database : {}",
-        db_path.display()
-    );
-
-    Ok(())
+    Ok(summary)
 }
 
-// ── Database setup ────────────────────────────────────────────────────────────
+// ── Database ─────────────────────────────────────────────────────────────────
 
-/// Create the SQLite database, configure it for bulk-insert performance,
-/// and set up the FTS5 virtual table plus the word-frequency table.
-fn setup_database(db_path: &Path) -> Result<Connection> {
+/// Delete any stale database (plus WAL/SHM siblings) and create a fresh one
+/// with the FTS5 schema.
+fn create_database(db_path: &Path, archive_path: &Path, opts: &IndexOptions) -> Result<Connection> {
+    for stale in [
+        db_path.to_path_buf(),
+        sibling(db_path, "-wal"),
+        sibling(db_path, "-shm"),
+    ] {
+        if stale.exists() {
+            fs::remove_file(&stale)
+                .with_context(|| format!("failed to remove old index file: {}", stale.display()))?;
+        }
+    }
+
     let conn = Connection::open(db_path)
-        .with_context(|| format!("Cannot create database at {}", db_path.display()))?;
+        .with_context(|| format!("cannot create database at {}", db_path.display()))?;
 
-    // PRAGMA journal_mode=WAL: Write-Ahead Logging is faster for concurrent
-    // reads/writes and reduces fsync calls during bulk inserts.
-    conn.execute_batch("PRAGMA journal_mode=WAL")?;
-
-    // PRAGMA synchronous=NORMAL: Let the OS buffer writes. Safe with WAL,
-    // and much faster than FULL (which fsyncs after every commit).
-    conn.execute_batch("PRAGMA synchronous=NORMAL")?;
-
-    // PRAGMA cache_size: Give SQLite a 64 MB page cache to reduce disk I/O.
-    // Negative value means kilobytes (not pages).
-    conn.execute_batch("PRAGMA cache_size=-65536")?;
-
-    // ── FTS5 virtual table ────────────────────────────────────────────────────
-    //
-    // FTS5 (Full-Text Search 5) is a SQLite extension that builds an inverted
-    // index over text columns. `content=""` means "contentless" — FTS5 stores
-    // only the index, not a copy of the text, saving significant space.
-    //
-    // `tokenize='unicode61'` uses SQLite's built-in Unicode-aware tokeniser:
-    //   - Splits on whitespace and punctuation
-    //   - Case-folds (search is case-insensitive by default)
-    //   - Handles multi-byte UTF-8 correctly
-    //
-    // Because we use content="" we cannot retrieve original text via FTS5,
-    // only look up which rowids match — which is exactly what we need.
+    // WAL + NORMAL sync: fast bulk loading, still crash-safe. The index is
+    // rebuildable, so we don't pay for FULL durability.
     conn.execute_batch(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA cache_size=-65536;",
+    )?;
+
+    // NOTE: this FTS5 table stores the full text content (that is what makes
+    // highlight()/snippet() and match counts work at search time). Expect the
+    // database to be roughly the size of the text it indexes.
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE files_fts USING fts5(
             path,
             content,
             tokenize = 'unicode61'
-        )",
-    )?;
-
-    // ── Word frequency table ──────────────────────────────────────────────────
-    //
-    // FTS5 can answer "which files contain word X" very fast, but it can't
-    // efficiently answer "what are the top-50 words globally". For that we
-    // maintain a separate key-value table: word → (total_count, doc_count).
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS word_freq (
+        );
+        CREATE TABLE word_freq (
             word        TEXT PRIMARY KEY,
             total_count INTEGER NOT NULL DEFAULT 0,
             doc_count   INTEGER NOT NULL DEFAULT 0
-        )",
+        );
+        CREATE TABLE meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
     )?;
 
-    // Index on total_count so `ORDER BY total_count DESC LIMIT N` is fast.
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_word_freq_total
-         ON word_freq(total_count DESC)",
-    )?;
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    set_meta(&conn, "schema_version", SCHEMA_VERSION)?;
+    set_meta(&conn, "archive", &archive_path.display().to_string())?;
+    set_meta(&conn, "created_unix", &created.to_string())?;
+    set_meta(&conn, "word_stats", if opts.word_stats { "1" } else { "0" })?;
+    set_meta(&conn, "completed", "0")?;
 
     Ok(conn)
 }
 
-// ── Per-entry indexing ────────────────────────────────────────────────────────
-
-/// Insert one archive entry into both FTS5 and the word-frequency table.
-fn index_entry(conn: &Connection, path: &str, content: &str) -> Result<()> {
-    // Insert into the FTS5 table. The FTS5 engine tokenises `content`
-    // automatically using the unicode61 tokeniser we configured above.
+fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO files_fts(path, content) VALUES (?1, ?2)",
-        params![path, content],
-    )
-    .with_context(|| format!("FTS5 insert failed for '{path}'"))?;
-
-    // ── Word frequency counting ────────────────────────────────────────────
-    // We tokenise here in Rust (same rules as FTS5 unicode61) to count words
-    // per document, then upsert into word_freq.
-    //
-    // Why not use FTS5's own term stats? Because FTS5's `fts5vocab` virtual
-    // table is slow for "give me all terms ranked by frequency" on large sets.
-    // A plain table with an index is much faster for the `top` query.
-    let words = tokenise(content);
-    if words.is_empty() {
-        return Ok(());
-    }
-
-    // Count occurrences of each word within this document.
-    // `std::collections::HashMap` is the standard key-value count structure.
-    use std::collections::HashMap;
-    let mut counts: HashMap<&str, u64> = HashMap::new();
-    for word in &words {
-        *counts.entry(word.as_str()).or_insert(0) += 1;
-    }
-
-    // `INSERT OR IGNORE` creates a row if it doesn't exist yet.
-    // `UPDATE` then adds to the counters. This is an "upsert" pattern.
-    let mut insert_stmt = conn.prepare_cached(
-        "INSERT OR IGNORE INTO word_freq(word, total_count, doc_count)
-         VALUES (?1, 0, 0)",
+        "INSERT INTO meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
     )?;
-    let mut update_stmt = conn.prepare_cached(
-        "UPDATE word_freq
-         SET total_count = total_count + ?2,
-             doc_count   = doc_count + 1
-         WHERE word = ?1",
-    )?;
-
-    for (word, count) in &counts {
-        insert_stmt.execute(params![word])?;
-        // `rusqlite` only implements `ToSql` for `i64`, not `u64`, so cast here.
-        update_stmt.execute(params![word, *count as i64])?;
-    }
-
     Ok(())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Return true if `data` looks like binary (non-text) content.
-///
-/// We use the same heuristic as `git` and the Unix `file` command:
-/// if the probe buffer contains a null byte (0x00), it's binary.
-/// This catches executables, images, compressed files, databases, etc.
-fn is_binary(data: &[u8]) -> bool {
-    // `iter().any(|&b| b == 0)` scans until the first null byte, then stops.
-    data.iter().any(|&b| b == 0)
+/// Record final totals and flip the completed flag. A database without
+/// completed=1 was interrupted mid-index and searches on it are partial.
+fn mark_complete(conn: &Connection, summary: &IndexSummary) -> Result<()> {
+    set_meta(conn, "files_indexed", &summary.files_indexed.to_string())?;
+    set_meta(
+        conn,
+        "files_skipped",
+        &summary.files_skipped_binary.to_string(),
+    )?;
+    set_meta(
+        conn,
+        "files_truncated",
+        &summary.files_truncated.to_string(),
+    )?;
+    set_meta(conn, "completed", "1")?;
+    Ok(())
 }
 
-/// Tokenise a string into lowercase alphabetic words of at least 3 characters.
-///
-/// This mirrors what SQLite's unicode61 tokeniser does in broad strokes:
-/// split on non-alphanumeric, lowercase, drop very short tokens (noise words).
-/// We don't need it to be identical — just consistent enough that the word_freq
-/// table is meaningful.
-fn tokenise(text: &str) -> Vec<String> {
-    text
-        // `split_whitespace` handles any Unicode whitespace character.
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() >= 3)
-        .map(|s| s.to_lowercase())
-        .collect()
+fn insert_file(conn: &Connection, path: &str, content: &str) -> Result<()> {
+    let mut stmt = conn.prepare_cached("INSERT INTO files_fts(path, content) VALUES (?1, ?2)")?;
+    stmt.execute(params![path, content])
+        .with_context(|| format!("FTS5 insert failed for '{path}'"))?;
+    Ok(())
 }
 
-/// Resolve the SQLite database path given the archive path and an optional override.
+// ── Word statistics ──────────────────────────────────────────────────────────
+
+/// Tokenise `text` and merge its per-document counts into `acc`.
 ///
-/// Priority:
-///   1. Caller-supplied explicit path (already a full PathBuf).
-///   2. Default: <archive>.db in the same directory.
-///   3. Fallback: ./backupsage.db if the archive's directory is not writable.
-pub fn resolve_db_path(archive_path: &Path, explicit: &PathBuf) -> Result<PathBuf> {
-    // If the caller already resolved an explicit path, use it directly.
-    // The `PathBuf::new()` default (empty path) signals "not provided".
-    if explicit.as_os_str().len() > 0 {
-        return Ok(explicit.clone());
+/// Tokenisation approximates FTS5's unicode61 (split on non-alphanumeric,
+/// case-fold); it only feeds the `top` statistics, not search.
+fn accumulate_words(text: &str, acc: &mut HashMap<String, (u64, u64)>) {
+    let mut doc_counts: HashMap<String, u64> = HashMap::new();
+    for token in text.split(|c: char| !c.is_alphanumeric()) {
+        // Cheap byte-length pre-filter before the exact char count.
+        if token.len() < MIN_WORD_CHARS || token.len() > MAX_WORD_CHARS * 4 {
+            continue;
+        }
+        let chars = token.chars().count();
+        if !(MIN_WORD_CHARS..=MAX_WORD_CHARS).contains(&chars) {
+            continue;
+        }
+        *doc_counts.entry(token.to_lowercase()).or_insert(0) += 1;
     }
+    for (word, count) in doc_counts {
+        let entry = acc.entry(word).or_insert((0, 0));
+        entry.0 += count;
+        entry.1 += 1;
+    }
+}
 
-    // Build default: add ".db" suffix to the archive filename.
-    let mut default_db = archive_path.to_path_buf();
-    let new_name = format!(
+/// Write the accumulated word counts with one upsert per distinct word.
+/// v0.1 ran two statements per word per document instead, which took hours
+/// on large archives.
+fn flush_word_stats(conn: &Connection, acc: &mut HashMap<String, (u64, u64)>) -> Result<()> {
+    if acc.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO word_freq(word, total_count, doc_count) VALUES (?1, ?2, ?3)
+         ON CONFLICT(word) DO UPDATE SET
+            total_count = total_count + excluded.total_count,
+            doc_count   = doc_count + excluded.doc_count",
+    )?;
+    for (word, (total, docs)) in acc.drain() {
+        stmt.execute(params![word, total as i64, docs as i64])?;
+    }
+    Ok(())
+}
+
+// ── Paths and helpers ────────────────────────────────────────────────────────
+
+fn db_file_name(archive_path: &Path) -> String {
+    format!(
         "{}.db",
         archive_path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
-    );
-    default_db.set_file_name(new_name);
-
-    // Check if the parent directory is writable by trying to create a temp file.
-    let parent = default_db.parent().unwrap_or_else(|| Path::new("."));
-    let test_path = parent.join(".backupsage_write_test");
-    let writable = File::create(&test_path).is_ok();
-    if writable {
-        // Clean up the test file immediately.
-        let _ = fs::remove_file(&test_path);
-        return Ok(default_db);
-    }
-
-    // Fallback: use CWD. Warn the user so they're not confused.
-    let fallback = PathBuf::from("backupsage.db");
-    eprintln!(
-        "Warning: '{}' is not writable — saving index to '{}'",
-        parent.display(),
-        fallback.display()
-    );
-    Ok(fallback)
-}
-
-/// Auto-discover the SQLite index path given an optional archive path.
-///
-/// Used by `search` and `top` commands. Resolution order:
-///   1. Explicit --index path (already passed as Option).
-///   2. <archive>.db if --archive was given.
-///   3. ./backupsage.db in the current directory.
-///   4. Any *.db file in the current directory (best-effort hint).
-pub fn discover_db_path(
-    explicit: &Option<PathBuf>,
-    archive: &Option<PathBuf>,
-) -> Result<PathBuf> {
-    // Priority 1: explicit path supplied by user.
-    if let Some(p) = explicit {
-        return Ok(p.clone());
-    }
-
-    // Priority 2: derive from archive name, same logic as indexer.
-    if let Some(archive_path) = archive {
-        let empty = PathBuf::new();
-        let derived = resolve_db_path(archive_path, &empty)?;
-        if derived.exists() {
-            return Ok(derived);
-        }
-    }
-
-    // Priority 3: conventional name in current directory.
-    let cwd_default = PathBuf::from("backupsage.db");
-    if cwd_default.exists() {
-        return Ok(cwd_default);
-    }
-
-    // Priority 4: scan the current directory for any .db file as a hint.
-    if let Ok(entries) = fs::read_dir(".") {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().map_or(false, |e| e == "db") {
-                eprintln!(
-                    "Hint: found index at '{}'. Use --index to be explicit.",
-                    p.display()
-                );
-                return Ok(p);
-            }
-        }
-    }
-
-    anyhow::bail!(
-        "No index found. Run `backupsage index <archive>` first, \
-         or pass --index <path>."
     )
 }
 
-/// Truncate a path string to `max_chars`, adding "…" prefix if it was cut.
-fn truncate_path(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        // Take the last `max_chars - 1` characters so the tail (filename) is visible.
-        let tail: String = s.chars().rev().take(max_chars - 1).collect::<String>()
-            .chars().rev().collect();
-        format!("…{tail}")
+/// Default database location: `<archive>.db` next to the archive, unless an
+/// explicit path was given.
+pub fn resolve_db_path(archive_path: &Path, explicit: Option<&Path>) -> PathBuf {
+    match explicit {
+        Some(p) => p.to_path_buf(),
+        None => archive_path.with_file_name(db_file_name(archive_path)),
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LEARNING NOTES
-// ─────────────────────────────────────────────────────────────────────────────
-// • Streaming pipeline: File → BufReader → ProgressBar wrapper → zstd::Decoder
-//   → tar::Archive. Each layer wraps the previous `io::Read`, so decompression
-//   and TAR parsing are interleaved — no full file is ever in memory at once.
-//
-// • `pb.wrap_read(reader)` is a zero-cost wrapper: it intercepts every `read()`
-//   call and adds the byte count to the progress bar.
-//
-// • SQLite FTS5 with `content=""` is "contentless" — it only stores the search
-//   index, not a copy of the original text. This cuts database size dramatically.
-//
-// • Batch transactions: committing every 500 rows instead of every 1 row gives
-//   ~500× faster throughput because each COMMIT is an fsync.
-//
-// • Binary detection via null-byte probe is fast (O(probe size)) and reliable
-//   for the common case of ELF, PNG, JPEG, ZIP, etc.
-//
-// • `prepare_cached` caches the parsed SQL statement so we don't re-parse the
-//   same INSERT/UPDATE SQL thousands of times per archive entry.
-// ─────────────────────────────────────────────────────────────────────────────
+fn sibling(db_path: &Path, suffix: &str) -> PathBuf {
+    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    db_path.with_file_name(name)
+}
+
+/// True if `data` looks like binary content (contains a null byte).
+fn is_binary(data: &[u8]) -> bool {
+    data.contains(&0)
+}
+
+/// Truncate a path to `max_chars` characters, keeping the tail (file name)
+/// visible.
+fn truncate_path(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let tail: String = s.chars().skip(count + 1 - max_chars).collect();
+    format!("…{tail}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_detection() {
+        assert!(is_binary(b"abc\x00def"));
+        assert!(!is_binary(b"plain text, nothing to see"));
+        assert!(!is_binary(b""));
+    }
+
+    #[test]
+    fn tokeniser_filters_and_folds() {
+        let mut acc = HashMap::new();
+        accumulate_words("Foo foo BAR ab x 123 Grüße", &mut acc);
+        assert_eq!(acc.get("foo"), Some(&(2, 1)));
+        assert_eq!(acc.get("bar"), Some(&(1, 1)));
+        assert_eq!(acc.get("123"), Some(&(1, 1)));
+        assert_eq!(acc.get("grüße"), Some(&(1, 1)));
+        assert!(!acc.contains_key("ab")); // below MIN_WORD_CHARS
+        assert!(!acc.contains_key("x"));
+    }
+
+    #[test]
+    fn tokeniser_drops_monster_tokens() {
+        let mut acc = HashMap::new();
+        accumulate_words(&"a".repeat(MAX_WORD_CHARS + 1), &mut acc);
+        assert!(acc.is_empty());
+    }
+
+    #[test]
+    fn doc_count_across_documents() {
+        let mut acc = HashMap::new();
+        accumulate_words("apple apple", &mut acc);
+        accumulate_words("apple banana", &mut acc);
+        assert_eq!(acc.get("apple"), Some(&(3, 2)));
+        assert_eq!(acc.get("banana"), Some(&(1, 1)));
+    }
+
+    #[test]
+    fn truncate_keeps_tail() {
+        assert_eq!(truncate_path("short", 10), "short");
+        let t = truncate_path("a/very/long/path/to/some/file.txt", 12);
+        assert_eq!(t.chars().count(), 12);
+        assert!(t.starts_with('…'));
+        assert!(t.ends_with("file.txt"));
+    }
+
+    #[test]
+    fn default_db_path_next_to_archive() {
+        let p = resolve_db_path(Path::new("/backups/sys.tar.zst"), None);
+        assert_eq!(p, Path::new("/backups/sys.tar.zst.db"));
+        let e = resolve_db_path(
+            Path::new("/backups/sys.tar.zst"),
+            Some(Path::new("/tmp/x.db")),
+        );
+        assert_eq!(e, Path::new("/tmp/x.db"));
+    }
+}

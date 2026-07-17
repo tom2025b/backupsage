@@ -1,47 +1,47 @@
 [package]
 name = "backupsage"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Fast CLI to index and search a large .tar.zst backup without extracting it"
+description = "Fast CLI to index and search text inside .tar, .tar.gz and .tar.zst backups without extracting them"
 license = "MIT"
 
-# ── Binary entry point ──────────────────────────────────────────────────────
+[lib]
+name = "backupsage"
+path = "src/lib.rs"
+
 [[bin]]
 name = "backupsage"
 path = "src/main.rs"
 
-# ── Dependencies ─────────────────────────────────────────────────────────────
 [dependencies]
-
-# CLI argument parsing — derive macro feature lets us define args as structs
+# CLI argument parsing via derive structs
 clap = { version = "4.5", features = ["derive"] }
 
-# SQLite bindings. "bundled" compiles SQLite from source (includes FTS5).
-# This avoids depending on whatever SQLite is installed on the host system.
+# SQLite bindings; "bundled" compiles SQLite from source so FTS5 is
+# guaranteed regardless of the host's SQLite build
 rusqlite = { version = "0.39", features = ["bundled"] }
 
-# Zstandard (zstd) decompression — streaming, no full decompression to disk
+# Streaming decompression — archives are never extracted to disk
 zstd = "0.13"
+flate2 = "1"
 
-# TAR archive reading — works on any Read stream, so we can chain it with zstd
+# TAR reading over any Read stream
 tar = "0.4"
 
-# Progress bars and spinners for the indexing phase
+# Progress bar for the indexing phase
 indicatif = { version = "0.17", features = ["improved_unicode"] }
 
-# Ergonomic error handling — wraps any error type, adds context strings
+# Ergonomic error handling with context strings
 anyhow = "1"
 
-# Pretty table output for `top` command (side-by-side frequency columns)
+# Table output for search/top results
 comfy-table = "7"
 
-# Human-readable byte/number formatting (e.g. "42.3 MB processed")
-humansize = "2"
+[dev-dependencies]
+tempfile = "3"
 
-# ── Release profile ───────────────────────────────────────────────────────────
-# Optimise for speed and small binary in release builds.
 [profile.release]
-opt-level = 3        # Maximum compiler optimisation
-lto = true           # Link-time optimisation (merges all crates for better inlining)
-codegen-units = 1    # Single codegen unit — slower compile, faster binary
-strip = true         # Strip debug symbols from the binary
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

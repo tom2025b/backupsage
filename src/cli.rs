@@ -1,59 +1,37 @@
-// ─── src/cli.rs ───────────────────────────────────────────────────────────────
-//
-// PURPOSE: Defines the command-line interface for BackupSage using clap's
-// "derive" API. Each subcommand is a variant of the `Commands` enum.
-// Clap automatically handles --help, --version, argument parsing, and
-// validation. We never write argument-parsing logic by hand.
-//
-// ─────────────────────────────────────────────────────────────────────────────
+//! Command-line interface, defined with clap's derive API.
 
-// `Parser` lets clap turn command-line args into our struct automatically.
-// `Subcommand` is used for variants that represent subcommands (index/search/top).
-// `Args` is used for groups of flags that can be shared between subcommands.
 use clap::{Args, Parser, Subcommand};
-
-// `PathBuf` is the owned, heap-allocated form of a filesystem path.
-// It's safer than `String` for paths because it handles OS differences.
 use std::path::PathBuf;
 
-// ── Top-level CLI struct ──────────────────────────────────────────────────────
-//
-// `#[derive(Parser)]` tells clap to generate all parsing boilerplate.
-// The `#[command(...)]` attribute sets the help text and version string.
 #[derive(Parser, Debug)]
 #[command(
     name = "backupsage",
     version,
-    about = "Index and search words inside a .tar.zst backup — without extracting it",
+    about = "Index and search words inside .tar, .tar.gz and .tar.zst backups — without extracting them",
     long_about = None,
 )]
 pub struct Cli {
-    // `#[command(subcommand)]` means the next positional arg selects a subcommand.
     #[command(subcommand)]
     pub command: Commands,
 }
 
-// ── Subcommands ───────────────────────────────────────────────────────────────
-//
-// Each variant corresponds to one subcommand the user can type.
-// Clap reads the variant name (lowercased) as the subcommand name by default.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Scan a .tar.zst archive and build a full-text search index (SQLite FTS5).
+    /// Scan a tar archive (plain, gzip or zstd) and build a full-text index.
     ///
     /// Example:
     ///   backupsage index /backups/system.tar.zst
-    ///   backupsage index /backups/system.tar.zst --index /tmp/system.db
+    ///   backupsage index /backups/old.tar.gz --index /tmp/old.db
     Index(IndexArgs),
 
     /// Search the index for files containing a keyword.
     ///
     /// Example:
     ///   backupsage search "password"
-    ///   backupsage search "TODO" --index /tmp/system.db
+    ///   backupsage search "TODO" --index /tmp/system.db --snippets
     Search(SearchArgs),
 
-    /// Show the 50 most frequent words across the entire backup.
+    /// Show the most frequent words across the entire backup.
     ///
     /// Example:
     ///   backupsage top
@@ -61,81 +39,99 @@ pub enum Commands {
     Top(TopArgs),
 }
 
-// ── index arguments ──────────────────────────────────────────────────────────
-//
-// `#[derive(Args)]` lets this struct be embedded inside a `Subcommand` variant.
 #[derive(Args, Debug)]
 pub struct IndexArgs {
-    /// Path to the .tar.zst archive to index.
-    ///
-    /// Must be a readable file. The archive is streamed — it is never
-    /// fully extracted to disk.
+    /// Path to the archive to index (.tar, .tar.gz or .tar.zst — detected by
+    /// content, not extension). The archive is streamed, never extracted.
     pub archive: PathBuf,
 
     /// Where to store the SQLite index database.
     ///
-    /// Defaults to <archive-path>.db (e.g. system.tar.zst → system.tar.zst.db).
-    /// Falls back to ./backupsage.db in the current directory if the archive's
-    /// directory is not writable.
+    /// Defaults to <archive-path>.db next to the archive; falls back to the
+    /// current directory if that location is not writable.
     #[arg(long, short = 'i', value_name = "FILE")]
     pub index: Option<PathBuf>,
+
+    /// Maximum content indexed per file. Larger files are indexed up to this
+    /// limit (their tail is not searchable). Accepts K/M/G suffixes.
+    /// 0 indexes file names only.
+    #[arg(long, value_name = "SIZE", default_value = "16M", value_parser = parse_size)]
+    pub max_file_size: u64,
+
+    /// Skip building word-frequency statistics (faster; `top` will be empty).
+    #[arg(long)]
+    pub no_word_stats: bool,
 }
 
-// ── search arguments ─────────────────────────────────────────────────────────
 #[derive(Args, Debug)]
 pub struct SearchArgs {
     /// The keyword or phrase to search for.
     ///
-    /// Matched using SQLite FTS5 full-text search. Supports:
-    ///   - Single words:     password
-    ///   - Phrase queries:   "error 404"
-    ///   - Prefix queries:   config*
+    /// FTS5 syntax is supported: single words, "exact phrases", prefix*
+    /// queries, AND / OR / NOT. Anything that is not valid FTS5 syntax is
+    /// automatically retried as a literal phrase.
     pub keyword: String,
 
-    /// Path to the archive (used to auto-discover the index file).
-    ///
-    /// If omitted, BackupSage looks for an index in the current directory.
+    /// Path to the archive (used to auto-discover its index file).
     #[arg(long, short = 'a', value_name = "ARCHIVE")]
     pub archive: Option<PathBuf>,
 
-    /// Explicit path to the SQLite index database.
-    ///
-    /// Overrides auto-discovery. Use this when the index was saved to a
-    /// non-default location during `backupsage index`.
+    /// Explicit path to the SQLite index database (overrides auto-discovery).
     #[arg(long, short = 'i', value_name = "FILE")]
     pub index: Option<PathBuf>,
+
+    /// Maximum number of matching files to show.
+    #[arg(long, short = 'n', default_value_t = 100)]
+    pub limit: usize,
+
+    /// Show a short excerpt of the matched text for each file.
+    #[arg(long, short = 's')]
+    pub snippets: bool,
 }
 
-// ── top arguments ─────────────────────────────────────────────────────────────
 #[derive(Args, Debug)]
 pub struct TopArgs {
-    /// Path to the archive (used to auto-discover the index file).
+    /// Path to the archive (used to auto-discover its index file).
     #[arg(long, short = 'a', value_name = "ARCHIVE")]
     pub archive: Option<PathBuf>,
 
-    /// Explicit path to the SQLite index database.
+    /// Explicit path to the SQLite index database (overrides auto-discovery).
     #[arg(long, short = 'i', value_name = "FILE")]
     pub index: Option<PathBuf>,
 
-    /// How many top words to show. Defaults to 50.
+    /// How many top words to show.
     #[arg(long, short = 'n', default_value_t = 50)]
     pub limit: usize,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LEARNING NOTES
-// ─────────────────────────────────────────────────────────────────────────────
-// • clap's `derive` API lets you write plain Rust structs/enums and get
-//   full CLI parsing for free — no manual match blocks needed.
-//
-// • `#[command(...)]` on the top-level struct controls the global help text
-//   and binary name shown in `--help`.
-//
-// • `#[arg(...)]` on a field controls that argument's flag name, short alias,
-//   value placeholder in help text, and default value.
-//
-// • `PathBuf` (not `String`) is always preferred for file system paths.
-//   It implements `From<OsStr>` so clap can set it directly from argv.
-//
-// • `Option<PathBuf>` means the argument is optional — None if not supplied.
-// ─────────────────────────────────────────────────────────────────────────────
+/// Parse a byte size with an optional K/M/G suffix (base 1024), e.g. "16M".
+fn parse_size(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    let (num, mult): (&str, u64) = match t.chars().last() {
+        Some('k') | Some('K') => (&t[..t.len() - 1], 1024),
+        Some('m') | Some('M') => (&t[..t.len() - 1], 1024 * 1024),
+        Some('g') | Some('G') => (&t[..t.len() - 1], 1024 * 1024 * 1024),
+        _ => (t, 1),
+    };
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(mult))
+        .ok_or_else(|| format!("invalid size '{s}' — use bytes or a K/M/G suffix, e.g. 16M"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_size;
+
+    #[test]
+    fn parses_sizes() {
+        assert_eq!(parse_size("0").unwrap(), 0);
+        assert_eq!(parse_size("4096").unwrap(), 4096);
+        assert_eq!(parse_size("16M").unwrap(), 16 * 1024 * 1024);
+        assert_eq!(parse_size("2k").unwrap(), 2048);
+        assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
+        assert!(parse_size("banana").is_err());
+        assert!(parse_size("999999999999G").is_err());
+    }
+}
