@@ -4,6 +4,7 @@
 //! arguments and renders output.
 
 pub mod cli;
+pub mod exif_date;
 pub mod format;
 pub mod indexer;
 pub mod phash;
