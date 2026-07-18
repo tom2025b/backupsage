@@ -6,4 +6,5 @@
 pub mod cli;
 pub mod format;
 pub mod indexer;
+pub mod phash;
 pub mod searcher;
