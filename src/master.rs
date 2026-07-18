@@ -120,6 +120,7 @@ fn init_master_conn(conn: &Connection) -> Result<()> {
             archive_blake3 TEXT,
             db_size        INTEGER,
             db_mtime_unix  INTEGER,
+            phash_algo     TEXT,
             status         TEXT NOT NULL DEFAULT 'ok',
             added_unix     INTEGER NOT NULL,
             synced_unix    INTEGER
@@ -174,6 +175,7 @@ struct SourceIdentity {
     archive_size: Option<i64>,
     archive_mtime_unix: Option<i64>,
     archive_blake3: Option<String>,
+    phash_algo: Option<String>,
 }
 
 fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
@@ -209,6 +211,7 @@ fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
         archive_mtime_unix: searcher::get_meta(&conn, "archive_mtime_unix")
             .and_then(|v| v.parse().ok()),
         archive_blake3: searcher::get_meta(&conn, "archive_blake3"),
+        phash_algo: searcher::get_meta(&conn, "phash_algo"),
     };
     Ok((conn, id))
 }
@@ -280,13 +283,13 @@ impl Master {
                         source_type=?4, label=?5, schema_version=?6, completed=?7,
                         indexed_unix=?8, archive_size=?9, archive_mtime_unix=?10,
                         archive_blake3=?11, db_size=?12, db_mtime_unix=?13,
-                        status=?14, synced_unix=?15
-                     WHERE archive_id=?16",
+                        phash_algo=?14, status=?15, synced_unix=?16
+                     WHERE archive_id=?17",
                     params![
                         id.index_uuid, db_abs, id.source_path, id.source_type, label,
                         id.schema_version, id.completed as i64, id.indexed_unix,
                         id.archive_size, id.archive_mtime_unix, id.archive_blake3,
-                        db_size, db_mtime, status, now_unix(), aid
+                        db_size, db_mtime, id.phash_algo, status, now_unix(), aid
                     ],
                 )?;
                 aid
@@ -296,13 +299,13 @@ impl Master {
                     "INSERT INTO archives (index_uuid, db_path, source_path, source_type,
                         label, schema_version, completed, indexed_unix, archive_size,
                         archive_mtime_unix, archive_blake3, db_size, db_mtime_unix,
-                        status, added_unix, synced_unix)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15)",
+                        phash_algo, status, added_unix, synced_unix)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)",
                     params![
                         id.index_uuid, db_abs, id.source_path, id.source_type, label,
                         id.schema_version, id.completed as i64, id.indexed_unix,
                         id.archive_size, id.archive_mtime_unix, id.archive_blake3,
-                        db_size, db_mtime, status, now_unix()
+                        db_size, db_mtime, id.phash_algo, status, now_unix()
                     ],
                 )?;
                 self.conn.last_insert_rowid()
