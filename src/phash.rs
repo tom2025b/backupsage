@@ -61,9 +61,15 @@ pub fn phash(img: &DynamicImage) -> u64 {
     sorted.sort_by(|a, b| a.partial_cmp(b).expect("DCT of finite pixels is finite"));
     let median = (sorted[BLOCK * BLOCK / 2 - 1] + sorted[BLOCK * BLOCK / 2]) / 2.0;
 
+    // Scale-relative epsilon: on flat images the 63 non-DC coefficients are
+    // float noise around zero, and a bare `> median` would set random bits.
+    // Real photos have |coef - median| orders of magnitude above this.
+    let scale = coefs.iter().fold(0f64, |m, c| m.max(c.abs()));
+    let eps = 1e-9 * (scale + 1.0);
+
     let mut hash = 0u64;
     for (i, &c) in coefs.iter().enumerate() {
-        if c > median {
+        if c > median + eps {
             hash |= 1 << (63 - i);
         }
     }
