@@ -7,6 +7,7 @@ pub mod cli;
 pub mod exif_date;
 pub mod format;
 pub mod indexer;
+pub mod master;
 pub mod phash;
 pub mod searcher;
 pub mod source_dir;
