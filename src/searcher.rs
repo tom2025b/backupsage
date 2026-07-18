@@ -184,6 +184,63 @@ pub fn top_words(conn: &Connection, limit: usize) -> Result<Vec<WordRow>> {
     Ok(out)
 }
 
+// ── Federated search ─────────────────────────────────────────────────────────
+
+pub struct FederatedHit {
+    pub archive_label: String,
+    pub hits: Vec<SearchHit>,
+    pub truncated: bool,
+}
+
+pub struct FederatedOutcome {
+    pub per_archive: Vec<FederatedHit>,
+    /// (label, reason) — archives not searched, or searched with caveats
+    /// (incomplete indexes are searched but flagged here too).
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Fan the query out over every archive registered in the master, one
+/// read-only connection at a time. BM25 ranks are per-archive and not
+/// comparable across indexes, so results stay grouped per archive. v2
+/// databases are fully searchable (same files_fts shape).
+pub fn search_all(
+    master: &crate::master::Master,
+    query: &str,
+    limit_per_archive: usize,
+    snippets: bool,
+) -> Result<FederatedOutcome> {
+    let mut out = FederatedOutcome {
+        per_archive: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for row in master.list()? {
+        let conn = match open_index(Path::new(&row.db_path)) {
+            Ok(c) => c,
+            Err(e) => {
+                out.skipped
+                    .push((row.label.clone(), format!("unreachable: {e:#}")));
+                continue;
+            }
+        };
+        if index_completed(&conn) == Some(false) {
+            out.skipped.push((
+                row.label.clone(),
+                "incomplete index — results may be partial".into(),
+            ));
+        }
+        let outcome = search(&conn, query, limit_per_archive, snippets)
+            .with_context(|| format!("search failed in '{}'", row.label))?;
+        if !outcome.hits.is_empty() {
+            out.per_archive.push(FederatedHit {
+                archive_label: row.label.clone(),
+                hits: outcome.hits,
+                truncated: outcome.truncated,
+            });
+        }
+    }
+    Ok(out)
+}
+
 // ── Index discovery ──────────────────────────────────────────────────────────
 
 /// Locate the index database for `search`/`top`:
