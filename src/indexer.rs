@@ -560,13 +560,9 @@ fn index_tar(
         }
 
         let size = entry.size();
-        let mut outcome = process_reader(
-            &mut entry,
-            size,
-            &entry_path,
-            opts,
-            &mut |msg| pb.suspend(|| eprintln!("{msg}")),
-        );
+        let mut outcome = process_reader(&mut entry, size, &entry_path, opts, &mut |msg| {
+            pb.suspend(|| eprintln!("{msg}"))
+        });
         outcome.flags |= extra_flags;
 
         let rec = EntryRecord {

@@ -194,8 +194,8 @@ pub fn insert_entry(conn: &Connection, rec: &EntryRecord) -> Result<i64> {
     .with_context(|| format!("files insert failed for '{}'", rec.path))?;
     let id = conn.last_insert_rowid();
 
-    let mut fts = conn
-        .prepare_cached("INSERT INTO files_fts(rowid, path, content) VALUES (?1, ?2, ?3)")?;
+    let mut fts =
+        conn.prepare_cached("INSERT INTO files_fts(rowid, path, content) VALUES (?1, ?2, ?3)")?;
     fts.execute(params![id, rec.path, rec.fts_content])
         .with_context(|| format!("FTS5 insert failed for '{}'", rec.path))?;
     Ok(id)

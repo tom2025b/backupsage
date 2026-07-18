@@ -42,7 +42,10 @@ fn metadata_hash_and_archive_fingerprint_all_formats() {
         assert_eq!((etype.as_str(), kind.as_str()), ("file", "text"));
         assert_eq!(size as usize, content.len());
         assert_eq!(mtime, Some(1_700_000_001));
-        assert_eq!(hash.as_deref(), Some(blake3::hash(&content).as_bytes().as_slice()));
+        assert_eq!(
+            hash.as_deref(),
+            Some(blake3::hash(&content).as_bytes().as_slice())
+        );
         assert_eq!(fl, 0);
 
         // The fingerprint must equal b3sum of the archive file itself —
@@ -54,7 +57,10 @@ fn metadata_hash_and_archive_fingerprint_all_formats() {
             "fingerprint mismatch for {}",
             archive.display()
         );
-        assert_eq!(searcher::get_meta(&conn, "schema_version").as_deref(), Some("3"));
+        assert_eq!(
+            searcher::get_meta(&conn, "schema_version").as_deref(),
+            Some("3")
+        );
         assert!(searcher::get_meta(&conn, "index_uuid").unwrap().len() == 32);
     }
 }
@@ -63,7 +69,11 @@ fn metadata_hash_and_archive_fingerprint_all_formats() {
 fn full_hash_past_the_text_cap() {
     let dir = tempfile::tempdir().unwrap();
     let big = vec![b'y'; 50_000];
-    let archive = write_archive(dir.path(), "big.tar", &build_tar(&[("logs/big.log", big.clone())]));
+    let archive = write_archive(
+        dir.path(),
+        "big.tar",
+        &build_tar(&[("logs/big.log", big.clone())]),
+    );
 
     let opts = IndexOptions {
         max_file_size: 4096,
@@ -76,7 +86,10 @@ fn full_hash_past_the_text_cap() {
     let (_, _, size, _, hash, _, _, fl) = files_row(&conn, "logs/big.log");
     assert_eq!(size, 50_000);
     // Hash covers ALL bytes even though FTS only got the first 4096.
-    assert_eq!(hash.as_deref(), Some(blake3::hash(&big).as_bytes().as_slice()));
+    assert_eq!(
+        hash.as_deref(),
+        Some(blake3::hash(&big).as_bytes().as_slice())
+    );
     assert_ne!(fl & flags::FTS_TRUNCATED, 0);
 }
 
@@ -104,7 +117,10 @@ fn images_get_phash_dims_and_exif_degrades_cleanly() {
     let (_, kind, _, _, hash, phash, _, _) = files_row(&conn, "photos/shot.png");
     assert_eq!(kind, "image");
     assert!(phash.is_some());
-    assert_eq!(hash.as_deref(), Some(blake3::hash(&png).as_bytes().as_slice()));
+    assert_eq!(
+        hash.as_deref(),
+        Some(blake3::hash(&png).as_bytes().as_slice())
+    );
     let (w, h): (i64, i64) = conn
         .query_row(
             "SELECT img_w, img_h FROM files WHERE path='photos/shot.png'",
@@ -138,13 +154,17 @@ fn hardlinks_resolve_and_shadowed_paths_are_flagged() {
     h.set_mode(0o644);
     h.set_mtime(1_700_000_001);
     h.set_cksum();
-    builder.append_data(&mut h, "bin/original", data.as_slice()).unwrap();
+    builder
+        .append_data(&mut h, "bin/original", data.as_slice())
+        .unwrap();
 
     let mut link = tar::Header::new_gnu();
     link.set_entry_type(tar::EntryType::Link);
     link.set_size(0);
     link.set_cksum();
-    builder.append_link(&mut link, "bin/alias", "bin/original").unwrap();
+    builder
+        .append_link(&mut link, "bin/alias", "bin/original")
+        .unwrap();
 
     // Same path twice: the later entry wins on extraction.
     for content in [&b"old version"[..], &b"new version"[..]] {
@@ -162,7 +182,10 @@ fn hardlinks_resolve_and_shadowed_paths_are_flagged() {
     let conn = searcher::open_index(&summary.db_path).unwrap();
     let (etype, _, _, _, hash, _, _, _) = files_row(&conn, "bin/alias");
     assert_eq!(etype, "hardlink");
-    assert_eq!(hash.as_deref(), Some(blake3::hash(&data).as_bytes().as_slice()));
+    assert_eq!(
+        hash.as_deref(),
+        Some(blake3::hash(&data).as_bytes().as_slice())
+    );
 
     let shadow_flags: Vec<i64> = {
         let mut stmt = conn
@@ -186,7 +209,10 @@ fn empty_files_get_empty_kind() {
     let archive = write_archive(
         dir.path(),
         "e.tar",
-        &build_tar(&[("a/zero.dat", Vec::new()), ("a/real.txt", b"words".to_vec())]),
+        &build_tar(&[
+            ("a/zero.dat", Vec::new()),
+            ("a/real.txt", b"words".to_vec()),
+        ]),
     );
     let conn = {
         let s = indexer::run_index(&archive, None, &IndexOptions::default()).unwrap();
@@ -195,7 +221,10 @@ fn empty_files_get_empty_kind() {
     let (_, kind, size, _, hash, _, _, _) = files_row(&conn, "a/zero.dat");
     assert_eq!(kind, "empty");
     assert_eq!(size, 0);
-    assert_eq!(hash.as_deref(), Some(blake3::hash(b"").as_bytes().as_slice()));
+    assert_eq!(
+        hash.as_deref(),
+        Some(blake3::hash(b"").as_bytes().as_slice())
+    );
 }
 
 #[test]
@@ -224,11 +253,17 @@ fn directory_source_end_to_end() {
     assert!(mtime.is_some());
     assert_eq!(
         hash.as_deref(),
-        Some(blake3::hash(b"holiday plans dedupword").as_bytes().as_slice())
+        Some(
+            blake3::hash(b"holiday plans dedupword")
+                .as_bytes()
+                .as_slice()
+        )
     );
 
     // FTS search works identically on directory indexes.
-    let hits = searcher::search(&conn, "dedupword", 10, false).unwrap().hits;
+    let hits = searcher::search(&conn, "dedupword", 10, false)
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "2023/note.txt");
 
@@ -237,7 +272,11 @@ fn directory_source_end_to_end() {
     let s2 = indexer::run_index(&src, Some(&inner_db), &IndexOptions::default()).unwrap();
     let conn2 = searcher::open_index(&s2.db_path).unwrap();
     let n: i64 = conn2
-        .query_row("SELECT COUNT(*) FROM files WHERE path LIKE '%self.db%'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path LIKE '%self.db%'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 0);
 }

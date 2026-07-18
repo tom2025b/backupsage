@@ -280,7 +280,15 @@ mod tests {
 
     #[test]
     fn parses_new_subcommands() {
-        let cli = Cli::parse_from(["backupsage", "dedup", "--db", "a.db", "--db", "b.db", "--json"]);
+        let cli = Cli::parse_from([
+            "backupsage",
+            "dedup",
+            "--db",
+            "a.db",
+            "--db",
+            "b.db",
+            "--json",
+        ]);
         match cli.command {
             Commands::Dedup(d) => {
                 assert_eq!(d.dbs.len(), 2);
@@ -291,8 +299,18 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
         let cli = Cli::parse_from(["backupsage", "master", "add", "x.tar.zst.db"]);
-        assert!(matches!(cli.command, Commands::Master(MasterCommands::Add { .. })));
-        let cli = Cli::parse_from(["backupsage", "index", "a.tar", "b.tar", "--media-cap", "128M"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Master(MasterCommands::Add { .. })
+        ));
+        let cli = Cli::parse_from([
+            "backupsage",
+            "index",
+            "a.tar",
+            "b.tar",
+            "--media-cap",
+            "128M",
+        ]);
         match cli.command {
             Commands::Index(i) => {
                 assert_eq!(i.sources.len(), 2);

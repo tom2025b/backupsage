@@ -87,7 +87,10 @@ fn sync_detects_rebuild_and_missing_db() {
     fs::write(&archive, &bigger).unwrap();
     indexer::run_index(&archive, None, &IndexOptions::default()).unwrap();
     let actions = m.sync(None).unwrap();
-    assert!(actions.iter().any(|(_, a)| a == "re-replicated"), "{actions:?}");
+    assert!(
+        actions.iter().any(|(_, a)| a == "re-replicated"),
+        "{actions:?}"
+    );
     let row = &m.list().unwrap()[0];
     assert_ne!(row.index_uuid, uuid_before);
     assert_eq!(row.files_count, 2);

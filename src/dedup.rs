@@ -203,8 +203,8 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             uf.union(a, b);
         }
         let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
-        for local in 0..image_idxs.len() {
-            clusters.entry(uf.find(local)).or_default().push(image_idxs[local]);
+        for (local, &global) in image_idxs.iter().enumerate() {
+            clusters.entry(uf.find(local)).or_default().push(global);
         }
         for (_, members) in clusters {
             if members.len() > 1 {
@@ -275,9 +275,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         for &i in &member_idxs {
             let r = &rows[i];
             let hamming = match (keep_phash, r.phash) {
-                (Some(a), Some(b)) if kind == "near" => {
-                    Some(phash::hamming(a as u64, b as u64))
-                }
+                (Some(a), Some(b)) if kind == "near" => Some(phash::hamming(a as u64, b as u64)),
                 _ if kind == "exact" => Some(0),
                 _ => None,
             };
@@ -301,10 +299,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 path: r.path.clone(),
                 kind: r.kind.clone(),
                 size: r.size,
-                content_hash: r
-                    .content_hash
-                    .as_ref()
-                    .map(|h| format!("b3:{}", hex(h))),
+                content_hash: r.content_hash.as_ref().map(|h| format!("b3:{}", hex(h))),
                 phash: r.phash.map(|p| format!("{:016x}", p as u64)),
                 mtime_unix: r.mtime_unix,
                 exif_unix: r.exif_unix,
@@ -314,7 +309,11 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 height: r.img_h,
                 hamming_to_keep: hamming,
                 keep: is_keep,
-                keep_reason: if is_keep { Some(keep_reason.clone()) } else { None },
+                keep_reason: if is_keep {
+                    Some(keep_reason.clone())
+                } else {
+                    None
+                },
                 shadowed: r.shadowed(),
                 sparse: r.sparse(),
                 hardlink_of: if r.is_hardlink() {
@@ -360,9 +359,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
     let images_without_phash: u64 = {
         let clause = scope_clause(&scope_ids);
         master.conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM files WHERE kind='image' AND phash IS NULL {clause}"
-            ),
+            &format!("SELECT COUNT(*) FROM files WHERE kind='image' AND phash IS NULL {clause}"),
             [],
             |r| r.get::<_, i64>(0),
         )? as u64
@@ -441,10 +438,7 @@ impl Row {
 
 // ── Scope resolution and fetching ────────────────────────────────────────────
 
-fn resolve_scope(
-    registry: &[crate::master::ArchiveRow],
-    wanted: &[String],
-) -> Result<Vec<i64>> {
+fn resolve_scope(registry: &[crate::master::ArchiveRow], wanted: &[String]) -> Result<Vec<i64>> {
     if wanted.is_empty() {
         return Ok(registry.iter().map(|a| a.archive_id).collect());
     }
@@ -452,9 +446,7 @@ fn resolve_scope(
     for w in wanted {
         let found: Vec<i64> = registry
             .iter()
-            .filter(|a| {
-                a.archive_id.to_string() == *w || a.label == *w || a.source_path == *w
-            })
+            .filter(|a| a.archive_id.to_string() == *w || a.label == *w || a.source_path == *w)
             .map(|a| a.archive_id)
             .collect();
         match found.as_slice() {
@@ -564,12 +556,7 @@ fn fetch_scope(master: &Master, p: &DedupParams, scope_ids: &[i64]) -> Result<Ve
 /// All pairs (by local index) within `threshold` hamming distance.
 /// Bucket iteration per 16-bit band; buckets over `cap` are skipped and
 /// counted — a warning surfaces in the report summary.
-fn mih_pairs(
-    hashes: &[u64],
-    threshold: u32,
-    cap: usize,
-    skipped: &mut u64,
-) -> Vec<(usize, usize)> {
+fn mih_pairs(hashes: &[u64], threshold: u32, cap: usize, skipped: &mut u64) -> Vec<(usize, usize)> {
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     for band in 0..4u32 {
@@ -592,9 +579,7 @@ fn mih_pairs(
             for x in 0..bucket.len() {
                 for y in (x + 1)..bucket.len() {
                     let (a, b) = (bucket[x], bucket[y]);
-                    if phash::hamming(hashes[a], hashes[b]) <= threshold
-                        && seen.insert((a, b))
-                    {
+                    if phash::hamming(hashes[a], hashes[b]) <= threshold && seen.insert((a, b)) {
                         pairs.push((a, b));
                     }
                 }
@@ -681,7 +666,10 @@ fn has_conflict_marker(path: &str) -> bool {
     }
     if stem.ends_with(')') {
         if let Some(open) = stem.rfind('(') {
-            if stem[open + 1..stem.len() - 1].chars().all(|c| c.is_ascii_digit()) {
+            if stem[open + 1..stem.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+            {
                 return true;
             }
         }

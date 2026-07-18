@@ -4,7 +4,6 @@
 
 mod common;
 
-use std::path::Path;
 use std::process::{Command, Output};
 
 use common::*;
@@ -56,7 +55,10 @@ fn full_flow_index_master_dedup_search() {
         &build_tar_mtime(
             &[
                 ("docs/final-report.pdf", payload.clone()),
-                ("export/holiday-edit.png", png_bytes_brightened(21, 320, 240, 8)),
+                (
+                    "export/holiday-edit.png",
+                    png_bytes_brightened(21, 320, 240, 8),
+                ),
             ],
             1_700_000_000,
         ),
@@ -67,8 +69,12 @@ fn full_flow_index_master_dedup_search() {
 
     // register both (by archive path — sibling .db resolution)
     let out = run_ok(&[
-        "--master", master_arg,
-        "master", "add", a.to_str().unwrap(), b.to_str().unwrap(),
+        "--master",
+        master_arg,
+        "master",
+        "add",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
     ]);
     assert!(stdout(&out).contains("registered 'old-laptop.tar'"));
 
@@ -84,11 +90,15 @@ fn full_flow_index_master_dedup_search() {
     assert_eq!(report["version"], 1);
     let groups = report["groups"].as_array().unwrap();
     assert_eq!(groups.len(), 2, "expected exact+near, got: {report}");
-    let kinds: Vec<&str> = groups.iter().map(|g| g["match_kind"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = groups
+        .iter()
+        .map(|g| g["match_kind"].as_str().unwrap())
+        .collect();
     assert!(kinds.contains(&"exact") && kinds.contains(&"near"));
     let exact = groups.iter().find(|g| g["match_kind"] == "exact").unwrap();
     let keep = exact["members"]
-        .as_array().unwrap()
+        .as_array()
+        .unwrap()
         .iter()
         .find(|m| m["keep"] == true)
         .unwrap();
@@ -108,10 +118,7 @@ fn full_flow_index_master_dedup_search() {
     assert!(text.contains("notes.txt"), "{text}");
 
     // inspect one file
-    let out = run_ok(&[
-        "inspect", "backup/report.pdf",
-        "-a", a.to_str().unwrap(),
-    ]);
+    let out = run_ok(&["inspect", "backup/report.pdf", "-a", a.to_str().unwrap()]);
     let text = stdout(&out);
     assert!(text.contains("BLAKE3"), "{text}");
     assert!(text.contains("tar header"), "{text}");
@@ -121,7 +128,11 @@ fn full_flow_index_master_dedup_search() {
 fn adhoc_dedup_without_master_and_exit_codes() {
     let dir = tempfile::tempdir().unwrap();
     let payload = b"twice-stored bytes".to_vec();
-    let a = write_archive(dir.path(), "x.tar", &build_tar(&[("f/one.dat", payload.clone())]));
+    let a = write_archive(
+        dir.path(),
+        "x.tar",
+        &build_tar(&[("f/one.dat", payload.clone())]),
+    );
     let b = write_archive(dir.path(), "y.tar", &build_tar(&[("g/two.dat", payload)]));
     run_ok(&["index", a.to_str().unwrap()]);
     run_ok(&["index", b.to_str().unwrap()]);
@@ -129,8 +140,10 @@ fn adhoc_dedup_without_master_and_exit_codes() {
     // Ad-hoc: no master anywhere near this.
     let out = run_ok(&[
         "dedup",
-        "--db", dir.path().join("x.tar.db").to_str().unwrap(),
-        "--db", dir.path().join("y.tar.db").to_str().unwrap(),
+        "--db",
+        dir.path().join("x.tar.db").to_str().unwrap(),
+        "--db",
+        dir.path().join("y.tar.db").to_str().unwrap(),
         "--json",
     ]);
     let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
@@ -148,8 +161,10 @@ fn adhoc_dedup_without_master_and_exit_codes() {
     // Offline archive → dedup still works from replicas, exit 2.
     let master = dir.path().join("m.db");
     run_ok(&[
-        "--master", master.to_str().unwrap(),
-        "master", "add",
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "add",
         dir.path().join("x.tar.db").to_str().unwrap(),
         dir.path().join("y.tar.db").to_str().unwrap(),
     ]);
@@ -197,8 +212,10 @@ fn dir_index_via_cli_and_v2_limited_flow() {
         .unwrap();
     }
     let out = run_ok(&[
-        "--master", master.to_str().unwrap(),
-        "master", "add",
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "add",
         dir.path().join("pics.db").to_str().unwrap(),
         v2.to_str().unwrap(),
     ]);
@@ -215,7 +232,13 @@ fn dir_index_via_cli_and_v2_limited_flow() {
 
     // …but the v2 db is fully searchable in the federated path.
     let out = bin()
-        .args(["--master", master.to_str().unwrap(), "search", "grepterm", "--all"])
+        .args([
+            "--master",
+            master.to_str().unwrap(),
+            "search",
+            "grepterm",
+            "--all",
+        ])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));

@@ -68,7 +68,10 @@ fn run() -> Result<i32> {
                 println!("{}", search_all_json(&outcome));
             } else {
                 if outcome.per_archive.is_empty() {
-                    println!("No results for '{}' in any registered archive.", args.keyword);
+                    println!(
+                        "No results for '{}' in any registered archive.",
+                        args.keyword
+                    );
                 }
                 for fed in &outcome.per_archive {
                     let n = fed.hits.len();
@@ -185,11 +188,12 @@ fn run() -> Result<i32> {
                 master::open_in_memory(&args.dbs)?
             };
             let mut report = dedup::run_dedup(&m, &params)?;
-            report.summary.skipped_archives.extend(adhoc_skips.into_iter().map(
-                |(label, reason)| {
+            report
+                .summary
+                .skipped_archives
+                .extend(adhoc_skips.into_iter().map(|(label, reason)| {
                     (label, format!("{reason} — no hashes; re-index to include"))
-                },
-            ));
+                }));
 
             let rendered = if args.json {
                 report.to_json()
@@ -326,26 +330,45 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
     }
 }
 
-fn inspect_path(
-    conn: &rusqlite::Connection,
-    db_path: &std::path::Path,
-    path: &str,
-) -> Result<i32> {
+fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &str) -> Result<i32> {
     let mut stmt = conn.prepare(
         "SELECT id, entry_type, kind, size, mtime_unix, mode, content_hash, img_w, img_h,
                 phash, exif_unix, exif_src, flags, link_target
          FROM files WHERE path = ?1 ORDER BY id",
     )?;
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(
-        i64, String, String, i64, Option<i64>, Option<i64>, Option<Vec<u8>>,
-        Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>,
-        i64, Option<String>,
+        i64,
+        String,
+        String,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        Option<Vec<u8>>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+        i64,
+        Option<String>,
     )> = stmt
         .query_map([path], |r| {
             Ok((
-                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
-                r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?,
-                r.get(12)?, r.get(13)?,
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+                r.get(9)?,
+                r.get(10)?,
+                r.get(11)?,
+                r.get(12)?,
+                r.get(13)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -365,9 +388,8 @@ fn inspect_path(
     );
     println!("Path     : {path}");
     for (i, row) in rows.iter().enumerate() {
-        let (
-            id, etype, kind, size, mtime, mode, hash, w, h, phash, exif, exif_src, fl, target,
-        ) = row;
+        let (id, etype, kind, size, mtime, mode, hash, w, h, phash, exif, exif_src, fl, target) =
+            row;
         if rows.len() > 1 {
             println!("── entry {} of {} (id {id}) ──", i + 1, rows.len());
         }
@@ -392,8 +414,11 @@ fn inspect_path(
             println!("Pixels   : {w}x{h}");
         }
         if let Some(p) = phash {
-            println!("pHash    : {:016x} ({})", *p as u64,
-                searcher::get_meta(conn, "phash_algo").unwrap_or_default());
+            println!(
+                "pHash    : {:016x} ({})",
+                *p as u64,
+                searcher::get_meta(conn, "phash_algo").unwrap_or_default()
+            );
         }
         if let Some(e) = exif {
             println!(
@@ -464,11 +489,8 @@ fn render_dedup_report(r: &DedupReport) -> String {
         let _ = writeln!(out, "No duplicate groups found.");
     }
     for g in &r.groups {
-        let archives: std::collections::BTreeSet<&str> = g
-            .members
-            .iter()
-            .map(|m| m.archive_label.as_str())
-            .collect();
+        let archives: std::collections::BTreeSet<&str> =
+            g.members.iter().map(|m| m.archive_label.as_str()).collect();
         let match_desc = if g.match_kind == "near" {
             format!("near (max dist {})", g.max_distance)
         } else {
@@ -490,7 +512,13 @@ fn render_dedup_report(r: &DedupReport) -> String {
             .max()
             .unwrap_or(10)
             .min(24);
-        let path_w = g.members.iter().map(|m| m.path.len()).max().unwrap_or(20).min(48);
+        let path_w = g
+            .members
+            .iter()
+            .map(|m| m.path.len())
+            .max()
+            .unwrap_or(20)
+            .min(48);
         for m in &g.members {
             let ts = m
                 .best_ts_unix
@@ -566,7 +594,10 @@ fn render_dedup_report(r: &DedupReport) -> String {
         let _ = writeln!(out, "note: '{label}' is offline — dedup used its replica");
     }
     for label in &s.archives_incomplete {
-        let _ = writeln!(out, "warning: '{label}' has an incomplete index — data is partial");
+        let _ = writeln!(
+            out,
+            "warning: '{label}' has an incomplete index — data is partial"
+        );
     }
     for (label, reason) in &s.skipped_archives {
         let _ = writeln!(out, "skipped: {label}: {reason}");
@@ -600,11 +631,7 @@ fn print_master_table(rows: &[master::ArchiveRow]) {
             Cell::new(format_number(r.files_count)).set_alignment(CellAlignment::Right),
             Cell::new(format!("v{}", r.schema_version)),
             Cell::new(&r.status).fg(status_color),
-            Cell::new(
-                r.indexed_unix
-                    .map(fmt_unix)
-                    .unwrap_or_else(|| "-".into()),
-            ),
+            Cell::new(r.indexed_unix.map(fmt_unix).unwrap_or_else(|| "-".into())),
             Cell::new(&r.source_path).fg(Color::DarkGrey),
         ]);
     }

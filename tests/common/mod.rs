@@ -1,4 +1,8 @@
 //! Shared fixtures for v3 integration tests.
+//!
+//! Each test binary compiles this module separately and none uses every
+//! helper, so per-binary dead-code analysis is noise here.
+#![allow(dead_code)]
 
 use std::fs;
 use std::io::Cursor;
@@ -36,7 +40,11 @@ pub fn png_bytes(seed: u32, w: u32, h: u32) -> Vec<u8> {
         image::Rgb([
             ((x * 7 + y * 3 + seed * 11) % 256) as u8,
             ((x + y * 2 + seed * 5) % 256) as u8,
-            if (x / 8 + y / 8 + seed) % 2 == 0 { 200 } else { 40 },
+            if (x / 8 + y / 8 + seed).is_multiple_of(2) {
+                200
+            } else {
+                40
+            },
         ])
     }));
     let mut png = Vec::new();

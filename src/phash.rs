@@ -129,7 +129,11 @@ mod tests {
             let s = seed as u32;
             let r = ((x * 7 + y * 3 + s * 11) % 256) as u8;
             let g = ((x * x / (w / 4).max(1) + y * 2 + s * 5) % 256) as u8;
-            let b = if (x / 16 + y / 16 + s) % 2 == 0 { 200 } else { 40 };
+            let b = if (x / 16 + y / 16 + s).is_multiple_of(2) {
+                200
+            } else {
+                40
+            };
             Rgb([r, g, b])
         });
         DynamicImage::ImageRgb8(img)
@@ -168,7 +172,10 @@ mod tests {
 
     #[test]
     fn different_images_are_far_apart() {
-        let d = hamming(phash(&synthetic(4, 320, 240)), phash(&synthetic(9, 320, 240)));
+        let d = hamming(
+            phash(&synthetic(4, 320, 240)),
+            phash(&synthetic(9, 320, 240)),
+        );
         assert!(d >= 16, "distinct images only {d} bits apart");
     }
 

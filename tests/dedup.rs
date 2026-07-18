@@ -93,7 +93,8 @@ fn near_duplicate_images_group_perceptually() {
     let report = run_dedup(&m, &DedupParams::default()).unwrap();
 
     assert_eq!(
-        report.summary.groups, 1,
+        report.summary.groups,
+        1,
         "expected one near group, got: {}",
         report.to_json()
     );
@@ -159,12 +160,16 @@ fn empty_files_hardlinks_and_single_archive_filters() {
     h.set_mode(0o644);
     h.set_mtime(1_700_000_001);
     h.set_cksum();
-    builder.append_data(&mut h, "f/original", data.as_slice()).unwrap();
+    builder
+        .append_data(&mut h, "f/original", data.as_slice())
+        .unwrap();
     let mut link = tar::Header::new_gnu();
     link.set_entry_type(tar::EntryType::Link);
     link.set_size(0);
     link.set_cksum();
-    builder.append_link(&mut link, "f/alias", "f/original").unwrap();
+    builder
+        .append_link(&mut link, "f/alias", "f/original")
+        .unwrap();
     let archive = write_archive(dir.path(), "hl.tar", &builder.into_inner().unwrap());
     let db_hl = indexer::run_index(&archive, None, &IndexOptions::default())
         .unwrap()
@@ -172,7 +177,8 @@ fn empty_files_hardlinks_and_single_archive_filters() {
     let (m2, _) = master::open_in_memory(std::slice::from_ref(&db_hl)).unwrap();
     let r3 = run_dedup(&m2, &DedupParams::default()).unwrap();
     assert_eq!(
-        r3.summary.groups, 0,
+        r3.summary.groups,
+        0,
         "file + own hardlink shares storage: {}",
         r3.to_json()
     );
@@ -190,7 +196,11 @@ fn across_only_and_archive_scope_filters() {
             ("y/copy2.dat", payload.clone()),
         ],
     );
-    let db_b = index_archive(dir.path(), "other.tar", &[("z/unique.dat", b"one".to_vec())]);
+    let db_b = index_archive(
+        dir.path(),
+        "other.tar",
+        &[("z/unique.dat", b"one".to_vec())],
+    );
     let m = master_of(dir.path(), &[&db_a, &db_b]);
 
     // Intra-archive dupes show by default…
@@ -231,7 +241,11 @@ fn shadowed_rows_never_keep_and_report_their_bytes() {
     let mut builder = tar::Builder::new(Vec::new());
     for (path, data, mtime) in [
         ("etc/config", payload.clone(), 1_710_000_000u64), // will be shadowed
-        ("etc/config", b"different final version".to_vec(), 1_700_000_000),
+        (
+            "etc/config",
+            b"different final version".to_vec(),
+            1_700_000_000,
+        ),
     ] {
         let mut h = tar::Header::new_gnu();
         h.set_size(data.len() as u64);
@@ -285,22 +299,50 @@ fn json_contract_field_names_are_stable() {
         assert!(v.get(key).is_some(), "missing top-level key {key}");
     }
     let group = &v["groups"][0];
-    for key in ["group_id", "match_kind", "max_distance", "reclaimable_bytes", "members"] {
+    for key in [
+        "group_id",
+        "match_kind",
+        "max_distance",
+        "reclaimable_bytes",
+        "members",
+    ] {
         assert!(group.get(key).is_some(), "missing group key {key}");
     }
     let member = &group["members"][0];
     for key in [
-        "archive_id", "archive_label", "file_id", "path", "kind", "size",
-        "content_hash", "phash", "mtime_unix", "exif_unix", "best_ts_unix",
-        "best_ts_source", "width", "height", "hamming_to_keep", "keep",
-        "keep_reason", "shadowed", "sparse", "hardlink_of",
+        "archive_id",
+        "archive_label",
+        "file_id",
+        "path",
+        "kind",
+        "size",
+        "content_hash",
+        "phash",
+        "mtime_unix",
+        "exif_unix",
+        "best_ts_unix",
+        "best_ts_source",
+        "width",
+        "height",
+        "hamming_to_keep",
+        "keep",
+        "keep_reason",
+        "shadowed",
+        "sparse",
+        "hardlink_of",
     ] {
         assert!(member.get(key).is_some(), "missing member key {key}");
     }
     for key in [
-        "groups", "duplicate_files", "reclaimable_bytes", "archives_offline",
-        "archives_incomplete", "skipped_archives", "images_without_phash",
-        "intra_archive_shadowed_bytes", "near_buckets_skipped",
+        "groups",
+        "duplicate_files",
+        "reclaimable_bytes",
+        "archives_offline",
+        "archives_incomplete",
+        "skipped_archives",
+        "images_without_phash",
+        "intra_archive_shadowed_bytes",
+        "near_buckets_skipped",
     ] {
         assert!(v["summary"].get(key).is_some(), "missing summary key {key}");
     }

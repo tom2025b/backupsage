@@ -217,7 +217,8 @@ pub fn search_all(
         let conn = match open_index(Path::new(&row.db_path)) {
             Ok(c) => c,
             Err(e) => {
-                out.skipped.push((row.label.clone(), format!("unreachable: {e:#}")));
+                out.skipped
+                    .push((row.label.clone(), format!("unreachable: {e:#}")));
                 continue;
             }
         };

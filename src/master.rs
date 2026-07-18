@@ -61,7 +61,9 @@ pub fn default_master_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| {
-            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
             home.join(".local/share")
         });
     base.join("backupsage/master.db")
@@ -219,11 +221,13 @@ fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
 /// Accepts either a `.db` index or the source itself (resolves `<source>.db`).
 fn resolve_db_arg(arg: &Path) -> Result<PathBuf> {
     if arg.is_file() {
-        if let Ok(conn) =
-            Connection::open_with_flags(arg, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        {
+        if let Ok(conn) = Connection::open_with_flags(arg, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             let is_index: bool = conn
-                .query_row("SELECT 1 FROM sqlite_master WHERE name='files_fts'", [], |_| Ok(()))
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE name='files_fts'",
+                    [],
+                    |_| Ok(()),
+                )
                 .is_ok();
             if is_index {
                 return Ok(arg.to_path_buf());
@@ -286,10 +290,23 @@ impl Master {
                         phash_algo=?14, status=?15, synced_unix=?16
                      WHERE archive_id=?17",
                     params![
-                        id.index_uuid, db_abs, id.source_path, id.source_type, label,
-                        id.schema_version, id.completed as i64, id.indexed_unix,
-                        id.archive_size, id.archive_mtime_unix, id.archive_blake3,
-                        db_size, db_mtime, id.phash_algo, status, now_unix(), aid
+                        id.index_uuid,
+                        db_abs,
+                        id.source_path,
+                        id.source_type,
+                        label,
+                        id.schema_version,
+                        id.completed as i64,
+                        id.indexed_unix,
+                        id.archive_size,
+                        id.archive_mtime_unix,
+                        id.archive_blake3,
+                        db_size,
+                        db_mtime,
+                        id.phash_algo,
+                        status,
+                        now_unix(),
+                        aid
                     ],
                 )?;
                 aid
@@ -302,10 +319,22 @@ impl Master {
                         phash_algo, status, added_unix, synced_unix)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)",
                     params![
-                        id.index_uuid, db_abs, id.source_path, id.source_type, label,
-                        id.schema_version, id.completed as i64, id.indexed_unix,
-                        id.archive_size, id.archive_mtime_unix, id.archive_blake3,
-                        db_size, db_mtime, id.phash_algo, status, now_unix()
+                        id.index_uuid,
+                        db_abs,
+                        id.source_path,
+                        id.source_type,
+                        label,
+                        id.schema_version,
+                        id.completed as i64,
+                        id.indexed_unix,
+                        id.archive_size,
+                        id.archive_mtime_unix,
+                        id.archive_blake3,
+                        db_size,
+                        db_mtime,
+                        id.phash_algo,
+                        status,
+                        now_unix()
                     ],
                 )?;
                 self.conn.last_insert_rowid()
@@ -316,8 +345,10 @@ impl Master {
             // v2 has no hashes: participates in federated search only.
             self.conn
                 .execute("DELETE FROM files WHERE archive_id=?1", [archive_id])?;
-            self.conn
-                .execute("UPDATE archives SET files_count=0 WHERE archive_id=?1", [archive_id])?;
+            self.conn.execute(
+                "UPDATE archives SET files_count=0 WHERE archive_id=?1",
+                [archive_id],
+            )?;
             return Ok(AddOutcome::V2Limited { label });
         }
 
@@ -333,33 +364,34 @@ impl Master {
                 [format!("file:{db_path}?mode=ro")],
             )
             .with_context(|| format!("cannot attach '{db_path}'"))?;
-        let result = (|| -> Result<u64> {
-            let tx_result: Result<u64> = (|| {
-                self.conn.execute_batch("BEGIN")?;
-                self.conn
-                    .execute("DELETE FROM files WHERE archive_id=?1", [archive_id])?;
-                let n = self.conn.execute(
-                    "INSERT INTO files (archive_id, file_id, path, entry_type, kind, size,
-                        mtime_unix, exif_unix, exif_src, content_hash, phash, img_w, img_h, flags)
-                     SELECT ?1, id, path, entry_type, kind, size, mtime_unix, exif_unix,
-                        exif_src, content_hash, phash, img_w, img_h, flags
-                     FROM src.files",
-                    [archive_id],
-                )? as u64;
-                self.conn.execute(
-                    "UPDATE archives SET files_count=?1, synced_unix=?2 WHERE archive_id=?3",
-                    params![n as i64, now_unix(), archive_id],
-                )?;
-                self.conn.execute_batch("COMMIT")?;
-                Ok(n)
-            })();
-            if tx_result.is_err() {
-                let _ = self.conn.execute_batch("ROLLBACK");
-            }
-            tx_result
-        })();
+        let tx_result = self.replicate_tx(archive_id);
+        if tx_result.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
         let _ = self.conn.execute_batch("DETACH DATABASE src");
-        result
+        tx_result
+    }
+
+    /// The transactional body of [`Self::replicate`]; assumes `src` is
+    /// attached. Split out so rollback/detach cleanup stays in one place.
+    fn replicate_tx(&mut self, archive_id: i64) -> Result<u64> {
+        self.conn.execute_batch("BEGIN")?;
+        self.conn
+            .execute("DELETE FROM files WHERE archive_id=?1", [archive_id])?;
+        let n = self.conn.execute(
+            "INSERT INTO files (archive_id, file_id, path, entry_type, kind, size,
+                mtime_unix, exif_unix, exif_src, content_hash, phash, img_w, img_h, flags)
+             SELECT ?1, id, path, entry_type, kind, size, mtime_unix, exif_unix,
+                exif_src, content_hash, phash, img_w, img_h, flags
+             FROM src.files",
+            [archive_id],
+        )? as u64;
+        self.conn.execute(
+            "UPDATE archives SET files_count=?1, synced_unix=?2 WHERE archive_id=?3",
+            params![n as i64, now_unix(), archive_id],
+        )?;
+        self.conn.execute_batch("COMMIT")?;
+        Ok(n)
     }
 
     pub fn list(&self) -> Result<Vec<ArchiveRow>> {
@@ -483,7 +515,11 @@ impl Master {
             } else if row.status == STATUS_STALE_INDEX || row.status == STATUS_ARCHIVE_MISSING {
                 self.set_status(
                     row.archive_id,
-                    if row.completed { STATUS_OK } else { STATUS_INCOMPLETE },
+                    if row.completed {
+                        STATUS_OK
+                    } else {
+                        STATUS_INCOMPLETE
+                    },
                 )?;
             }
         }
@@ -514,9 +550,7 @@ impl Master {
                     .execute("DELETE FROM archives WHERE archive_id=?1", [one])?;
                 Ok(())
             }
-            many => bail!(
-                "'{key}' is ambiguous — matches archive ids {many:?}; use the id"
-            ),
+            many => bail!("'{key}' is ambiguous — matches archive ids {many:?}; use the id"),
         }
     }
 
