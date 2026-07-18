@@ -9,4 +9,5 @@ pub mod format;
 pub mod indexer;
 pub mod phash;
 pub mod searcher;
+pub mod source_dir;
 pub mod store;

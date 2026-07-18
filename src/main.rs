@@ -15,6 +15,7 @@ fn main() -> Result<()> {
         Commands::Index(args) => {
             let opts = IndexOptions {
                 max_file_size: args.max_file_size,
+                media_cap: backupsage::indexer::DEFAULT_MEDIA_CAP,
                 word_stats: !args.no_word_stats,
             };
             let summary = indexer::run_index(&args.archive, args.index.as_deref(), &opts)?;
