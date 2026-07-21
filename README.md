@@ -227,11 +227,12 @@ Design docs: `docs/superpowers/specs/` (architecture) and
 
 ## Roadmap
 
-**v1.1** — `organize` (photo-organizer's YYYY/YYYY-MM layout for directory
-sources; dry-run + manifest first), `extract` chosen winners, HEIC pHash
-(`heif` feature), RAW decode via rawler, `--keep-policy`. **v2.0** — web UI
-(axum + the same JSON contract), workspace split, remote sources.
-**Never** — anything that rewrites or deletes from an archive.
+BackupSage's risk-gated release sequence is **v1.0.1 safety** → **v1.0.2
+correctness** → **v1.1 intelligence and plans** → **v1.2 controlled actions**
+→ **v1.3 media and scale** → **v2.0 local web** → **v2.1 remote sources**.
+See the reader-facing [roadmap](docs/ROADMAP.md) for each milestone's outcome,
+dependencies, issue checklist, and exit gate. The permanent invariant remains:
+BackupSage never rewrites or deletes from an archive.
 
 ## License
 
