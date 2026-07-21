@@ -33,11 +33,11 @@ the shared execution contract while operating on user data.
 
 **Issues:**
 
-- [ ] Protect index destinations and preserve the last-good index.
-- [ ] Make dedup report writes no-clobber and alias-aware.
-- [ ] Validate master catalog identity before read-write open.
-- [ ] Sanitize untrusted text and preserve lossless paths.
-- [ ] Remediate current Rust advisories and publish v1.0.1.
+- [ ] Protect index destinations and preserve the last-good index
+- [ ] Make dedup report writes no-clobber and alias-aware
+- [ ] Validate master catalog identity before read-write open
+- [ ] Sanitize untrusted text and preserve lossless paths
+- [ ] Remediate current Rust advisories and publish v1.0.1
 
 **Exit gate:** destructive-path regressions preserve protected fixture digests
 and identities; interrupted indexing preserves the previous completed index;
@@ -53,10 +53,10 @@ explicitly documented. No v1.0 tag ships from the current unsafe baseline.
 
 **Issues:**
 
-- [ ] Add a sparse-tar differential end-to-end corpus.
-- [ ] Make near-duplicate groups keeper-safe.
-- [ ] Add explicit content indexing modes.
-- [ ] Close the v1 debt register and release-contract gaps.
+- [ ] Add a sparse-tar differential end-to-end corpus
+- [ ] Make near-duplicate groups keeper-safe
+- [ ] Add explicit content indexing modes
+- [ ] Close the v1 debt register and release-contract gaps
 
 **Exit gate:** sparse behavior has end-to-end evidence; every automatic future
 deletion candidate is directly safe relative to its keeper; privacy behavior is
@@ -73,11 +73,11 @@ the v1.2 executor.
 
 **Issues:**
 
-- [ ] Freeze the immutable action-plan contract.
-- [ ] Add source snapshot diff.
-- [ ] Add coverage and replica-health reporting.
-- [ ] Add read-only integrity checks.
-- [ ] Generate organize, extract, and dedup plans without applying them.
+- [ ] Freeze the immutable action-plan contract
+- [ ] Add source snapshot diff
+- [ ] Add coverage and replica-health reporting
+- [ ] Add read-only integrity checks
+- [ ] Generate organize, extract, and dedup plans without applying them
 
 **Exit gate:** commands have stable JSON fixtures and honest incomplete-data
 states; plans are deterministic; a regular persisted plan is reviewable before
@@ -93,11 +93,11 @@ immutable.
 
 **Issues:**
 
-- [ ] Build the transactional plan executor.
-- [ ] Execute directory organize plans.
-- [ ] Execute copy-only archive extraction plans.
-- [ ] Apply directory dedup plans through quarantine.
-- [ ] Add keep policies and replica protections.
+- [ ] Build the transactional plan executor
+- [ ] Execute directory organize plans
+- [ ] Execute copy-only archive extraction plans
+- [ ] Apply directory dedup plans through quarantine
+- [ ] Add keep policies and replica protections
 
 **Exit gate:** kill-and-resume tests prove action-ID idempotence; changed inputs,
 stale plans, aliases, and conflicts fail closed; organize rejects cross-device
@@ -116,12 +116,12 @@ but cannot ship first.
 
 **Issues:**
 
-- [ ] Add opt-in HEIC perceptual hashing.
-- [ ] Add deterministic RAW preview hashing.
-- [ ] Support thresholds above three with benchmarked MIH.
-- [ ] Add incremental directory re-index.
-- [ ] Parallelize federated search deterministically.
-- [ ] Add video creation metadata before video fingerprints.
+- [ ] Add opt-in HEIC perceptual hashing
+- [ ] Add deterministic RAW preview hashing
+- [ ] Support thresholds above three with benchmarked MIH
+- [ ] Add incremental directory re-index
+- [ ] Parallelize federated search deterministically
+- [ ] Add video creation metadata before video fingerprints
 
 **Exit gate:** HEIC and RAW remain opt-in with adversarial/decode-limit coverage
 and recorded capabilities; threshold expansion matches a brute-force oracle
@@ -140,11 +140,11 @@ happens when this second frontend needs it.
 
 **Issues:**
 
-- [ ] Split the workspace into core, CLI, and web crates.
-- [ ] Publish `/api/v1` contracts.
-- [ ] Add a persistent job service.
-- [ ] Build the secure loopback-first Axum UI.
-- [ ] Add web end-to-end, packaging, and upgrade tests.
+- [ ] Split the workspace into core, CLI, and web crates
+- [ ] Publish /api/v1 contracts
+- [ ] Add a persistent job service
+- [ ] Build the secure loopback-first Axum UI
+- [ ] Add web end-to-end, packaging, and upgrade tests
 
 **Exit gate:** CLI and web fixtures agree for every shared operation; schema
 version negotiation is tested; jobs survive restart with cancellation and
@@ -161,9 +161,9 @@ partial failure.
 
 **Issues:**
 
-- [ ] Define capability-based source interfaces.
-- [ ] Add version-pinned S3 and SSH adapters.
-- [ ] Add verified spooling, caching, extraction, and failure tests.
+- [ ] Define capability-based source interfaces
+- [ ] Add version-pinned S3 and SSH adapters
+- [ ] Add verified spooling, caching, extraction, and failure tests
 
 **Exit gate:** capability negotiation prevents unsupported range or retry
 assumptions; each job pins a stable remote version or reports inconclusive;
