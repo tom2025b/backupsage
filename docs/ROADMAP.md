@@ -124,11 +124,13 @@ but cannot ship first.
 - [ ] Add video creation metadata before video fingerprints
 
 **Exit gate:** HEIC and RAW remain opt-in with adversarial/decode-limit coverage
-and recorded capabilities; threshold expansion matches a brute-force oracle
-without bucket-cap recall loss; incremental results converge after forced full
-reconciliation; federated search preserves serial ordering within documented
-resource bounds; and video timestamp provenance is visible. Video fingerprinting
-does not ship without its own design and benchmarks.
+and recorded capabilities; the MIH issue first publishes target corpus sizes and
+an acceptable recall, latency, memory, and candidate-volume envelope, then proves
+threshold expansion against a brute-force oracle without bucket-cap recall loss;
+incremental results converge after forced full reconciliation; federated search
+preserves serial ordering within documented resource bounds; and video timestamp
+provenance is visible. Video fingerprinting does not ship without its own design
+and benchmarks.
 
 ### v2.0 — Local web UI
 

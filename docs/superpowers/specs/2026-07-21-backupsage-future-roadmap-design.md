@@ -53,7 +53,7 @@ contract.
 
 ## Release milestones
 
-### v1.0.1 - Safety baseline
+### v1.0.1 — Safety baseline
 
 **Outcome:** the current read-only promise becomes true at every output path.
 
@@ -91,7 +91,7 @@ Exit gates:
   remaining warning explicitly documented.
 - No v1.0 tag is cut from the current unsafe baseline.
 
-### v1.0.2 - Correctness and debt
+### v1.0.2 — Correctness and debt
 
 **Outcome:** close known specification gaps before adding new workflows.
 
@@ -122,7 +122,7 @@ Exit gates:
 - Public JSON fixtures and the executable release checklist cover the debt
   register's remaining contract work.
 
-### v1.1 - Read-only intelligence and immutable plans
+### v1.1 — Read-only intelligence and immutable plans
 
 **Outcome:** users can understand change, coverage, integrity, and proposed
 actions without changing their data.
@@ -155,7 +155,7 @@ Exit gates:
   plan or standard input.
 - No v1.1 command moves, deletes, overwrites, or extracts user data.
 
-### v1.2 - Controlled directory actions
+### v1.2 — Controlled directory actions
 
 **Outcome:** reviewed plans can be executed with recovery paths; archives stay
 immutable.
@@ -197,7 +197,7 @@ Exit gates:
   reviewed command, and near duplicates are never selected automatically.
 - No code path opens an archive for write or delete.
 
-### v1.3 - Media formats and scale
+### v1.3 — Media formats and scale
 
 **Outcome:** optional format support and larger catalogs arrive without
 weakening deterministic results or default portability.
@@ -210,9 +210,10 @@ Issues:
 2. **Add deterministic RAW preview hashing.** Prefer embedded full-size
    previews; otherwise use a frozen `rawler` rendering profile. Keep the
    feature optional and record the decoder/hash algorithm versions.
-3. **Support thresholds above three with benchmarked MIH.** Compare candidate
-   layouts against a brute-force recall oracle and real bucket distributions
-   before selecting an index scheme.
+3. **Support thresholds above three with benchmarked MIH.** First publish the
+   target corpus sizes and acceptable recall, latency, memory, and candidate
+   volume envelope. Then compare candidate layouts against a brute-force recall
+   oracle and real bucket distributions before selecting an index scheme.
 4. **Add incremental directory re-index.** Treat full reconciliation as the
    source of truth; use filesystem watchers only as dirty-path accelerators,
    detect overflow, record generations, and expose `--force-full`.
@@ -235,8 +236,9 @@ Exit gates:
 
 - HEIC and RAW remain opt-in, pass decode-limit/adversarial fixtures, and record
   every native/algorithm capability needed to compare hashes honestly.
-- Threshold expansion matches the brute-force oracle on generated and real
-  corpora without bucket-cap recall loss at the published scale target.
+- The MIH issue publishes its target corpus and resource envelope before
+  evaluation; threshold expansion then matches the brute-force oracle without
+  bucket-cap recall loss inside that envelope.
 - Incremental indexes converge in query results with a forced full
   reconciliation after watcher overflow and interrupted updates.
 - Parallel federated search preserves serial result ordering and skipped-source
@@ -244,7 +246,7 @@ Exit gates:
 - Video timestamp provenance is visible; video fingerprinting remains outside
   the release unless separately designed and benchmarked.
 
-### v2.0 - Local web UI
+### v2.0 — Local web UI
 
 **Outcome:** a loopback-first web application renders the same core behavior
 without duplicating the indexing or analysis pipeline.
@@ -282,7 +284,7 @@ Exit gates:
   CORS enforcement and reject arbitrary browser-supplied filesystem paths.
 - Packaged installs load all assets and pass the end-to-end recovery workflow.
 
-### v2.1 - Remote sources
+### v2.1 — Remote sources
 
 **Outcome:** S3 and SSH sources behave honestly under latency, change, and
 partial failure.
