@@ -15,3 +15,4 @@ pub mod report;
 pub mod searcher;
 pub mod source_dir;
 pub mod store;
+pub mod textsafe;
