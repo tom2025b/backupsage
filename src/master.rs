@@ -69,15 +69,135 @@ pub fn default_master_path() -> PathBuf {
     base.join("backupsage/master.db")
 }
 
-pub fn open_at(path: &Path) -> Result<Master> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create master directory {}", parent.display()))?;
+/// SQLite `application_id` stamped into every master catalog ("BSAG").
+pub const MASTER_APPLICATION_ID: u32 = 0x4253_4147;
+
+/// What a read-only identity probe found at a `--master` path.
+pub enum MasterProbe {
+    /// Nothing exists there — safe to create.
+    Absent,
+    /// A catalog carrying the BackupSage master signature.
+    SignedMaster,
+    /// A master created before v1.0.1 (unsigned but master-shaped).
+    LegacyMaster,
+    /// A per-source BackupSage index — never a master.
+    PerSourceIndex,
+    /// Anything else: non-SQLite data, someone else's database, an
+    /// empty pre-existing file.
+    Foreign,
+}
+
+/// Read-only identity probe. Never creates the file, never writes,
+/// never leaves sidecars. Alias spellings (symlink, sidecar names)
+/// fail here rather than classify.
+pub fn probe(path: &Path) -> Result<MasterProbe> {
+    // Sidecar-name alias: "<base>-wal"/"<base>-shm" beside an existing
+    // base is refused whether or not the sidecar itself exists yet.
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        for suffix in ["-wal", "-shm"] {
+            if let Some(base) = name.strip_suffix(suffix) {
+                if !base.is_empty() && path.with_file_name(base).exists() {
+                    bail!(
+                        "master path '{}' is a SQLite sidecar of '{}'; refusing",
+                        path.display(),
+                        base
+                    );
+                }
+            }
+        }
     }
-    let conn = Connection::open(path)
-        .with_context(|| format!("cannot open master catalog at {}", path.display()))?;
-    init_master_conn(&conn)?;
-    Ok(Master { conn })
+    let md = match fs::symlink_metadata(path) {
+        Err(_) => return Ok(MasterProbe::Absent),
+        Ok(md) => md,
+    };
+    if md.file_type().is_symlink() {
+        bail!(
+            "master path '{}' is a symlink; refusing to open it read-write",
+            path.display()
+        );
+    }
+    if md.len() == 0 {
+        return Ok(MasterProbe::Foreign); // never adopt a pre-existing empty file
+    }
+    let mut head = [0u8; 16];
+    {
+        use std::io::Read;
+        let n = fs::File::open(path)
+            .with_context(|| format!("cannot read '{}'", path.display()))?
+            .read(&mut head)?;
+        if n < 16 || &head != b"SQLite format 3\0" {
+            return Ok(MasterProbe::Foreign);
+        }
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("cannot open '{}' read-only", path.display()))?;
+    let appid: u32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    if appid == MASTER_APPLICATION_ID {
+        return Ok(MasterProbe::SignedMaster);
+    }
+    let has_table = |name: &str| -> bool {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE name = ?1",
+            [name],
+            |_| Ok(()),
+        )
+        .is_ok()
+    };
+    if has_table("files_fts") {
+        return Ok(MasterProbe::PerSourceIndex);
+    }
+    if appid == 0 && has_table("archives") && has_table("files") {
+        // v1.0.0-created master: archives registry + master-shaped files.
+        // pb0 is a VIRTUAL generated column, hidden from table_info —
+        // only table_xinfo lists it.
+        let master_shaped = conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_xinfo('files') WHERE name = 'pb0'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if master_shaped {
+            return Ok(MasterProbe::LegacyMaster);
+        }
+    }
+    Ok(MasterProbe::Foreign)
+}
+
+pub fn open_at(path: &Path) -> Result<Master> {
+    match probe(path)? {
+        MasterProbe::Absent => {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("cannot create master directory {}", parent.display())
+                })?;
+            }
+            let conn = Connection::open(path)
+                .with_context(|| format!("cannot create master catalog at {}", path.display()))?;
+            conn.pragma_update(None, "application_id", MASTER_APPLICATION_ID)?;
+            init_master_conn(&conn)?;
+            Ok(Master { conn })
+        }
+        probe_result @ (MasterProbe::SignedMaster | MasterProbe::LegacyMaster) => {
+            let conn = Connection::open(path)
+                .with_context(|| format!("cannot open master catalog at {}", path.display()))?;
+            // Legacy masters are adopted by stamping the signature once;
+            // an already-signed master is never rewritten just to open it.
+            if matches!(probe_result, MasterProbe::LegacyMaster) {
+                conn.pragma_update(None, "application_id", MASTER_APPLICATION_ID)?;
+            }
+            init_master_conn(&conn)?;
+            Ok(Master { conn })
+        }
+        MasterProbe::PerSourceIndex => bail!(
+            "'{}' is a per-source index, not a master catalog; refusing to modify it",
+            path.display()
+        ),
+        MasterProbe::Foreign => bail!(
+            "'{}' exists but is not a BackupSage master catalog; refusing to modify it",
+            path.display()
+        ),
+    }
 }
 
 /// Throwaway master for ad-hoc `dedup --db a.db --db b.db` — same schema,
