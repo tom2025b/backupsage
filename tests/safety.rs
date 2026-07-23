@@ -181,6 +181,90 @@ fn dedup_output_never_clobbers() {
 }
 
 #[test]
+fn master_open_validates_identity_before_write() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(d.path(), "a.tar", &build_tar(&[("f.txt", b"hi".to_vec())]));
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+
+    // 1. per-source index must not be adopted or contaminated
+    let idx = d.path().join("a.tar.db");
+    let idig = digest_of(&idx);
+    let out = run(
+        &["--master", "a.tar.db", "master", "add", "a.tar.db"],
+        d.path(),
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        digest_of(&idx),
+        idig,
+        "per-source index must stay byte-identical"
+    );
+    assert!(!d.path().join("a.tar.db-wal").exists());
+    assert!(!d.path().join("a.tar.db-shm").exists());
+
+    // 2. arbitrary SQLite database rejected unchanged
+    let alien = d.path().join("alien.db");
+    let conn = rusqlite::Connection::open(&alien).unwrap();
+    conn.execute_batch("CREATE TABLE t(x); INSERT INTO t VALUES (1);")
+        .unwrap();
+    drop(conn);
+    let adig = digest_of(&alien);
+    let out = run(
+        &["--master", "alien.db", "master", "add", "a.tar.db"],
+        d.path(),
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(digest_of(&alien), adig);
+    assert!(!d.path().join("alien.db-wal").exists());
+
+    // 3. archive, symlink, sidecar-name, and empty-file aliases fail closed
+    fs::write(d.path().join("empty.db"), b"").unwrap();
+    std::os::unix::fs::symlink(d.path().join("a.tar"), d.path().join("ml.db")).unwrap();
+    fs::write(d.path().join("base.db"), b"x").unwrap();
+    let tdig = digest_of(&d.path().join("a.tar"));
+    for m in ["a.tar", "ml.db", "base.db-wal", "empty.db"] {
+        let out = run(&["--master", m, "master", "add", "a.tar.db"], d.path());
+        assert_eq!(out.status.code(), Some(1), "master {m}");
+    }
+    assert_eq!(digest_of(&d.path().join("a.tar")), tdig);
+    assert!(fs::symlink_metadata(d.path().join("ml.db"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(!d.path().join("base.db-wal").exists());
+    assert_eq!(fs::metadata(d.path().join("empty.db")).unwrap().len(), 0);
+
+    // 4. absent safe path creates a signed catalog that reopens fine
+    assert!(
+        run(&["--master", "m.db", "master", "add", "a.tar.db"], d.path())
+            .status
+            .success()
+    );
+    let conn = rusqlite::Connection::open(d.path().join("m.db")).unwrap();
+    let appid: u32 = conn
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(appid, 0x4253_4147);
+    drop(conn);
+    assert!(run(&["--master", "m.db", "master", "list"], d.path())
+        .status
+        .success());
+
+    // 5. legacy unsigned master (application_id 0) is adopted and stamped
+    let conn = rusqlite::Connection::open(d.path().join("m.db")).unwrap();
+    conn.pragma_update(None, "application_id", 0).unwrap();
+    drop(conn);
+    assert!(run(&["--master", "m.db", "master", "list"], d.path())
+        .status
+        .success());
+    let conn = rusqlite::Connection::open(d.path().join("m.db")).unwrap();
+    let appid: u32 = conn
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(appid, 0x4253_4147);
+}
+
+#[test]
 fn cwd_fallback_refuses_foreign_db() {
     let d = tempfile::tempdir().unwrap();
     let ro = d.path().join("ro");
