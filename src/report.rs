@@ -53,6 +53,10 @@ pub struct Member {
     pub archive_label: String,
     pub file_id: i64,
     pub path: String,
+    /// Lowercase hex of the raw path bytes — present only when `path`
+    /// is a lossy rendering of a non-UTF-8 original (added v1.0.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_bytes: Option<String>,
     pub kind: String,
     pub size: u64,
     /// `"b3:<hex>"`.
@@ -92,6 +96,11 @@ pub struct Summary {
     pub intra_archive_shadowed_bytes: u64,
     /// Near-dup buckets skipped because they exceeded the bucket cap.
     pub near_buckets_skipped: u64,
+}
+
+/// Lowercase hex rendering used for every `*_bytes` JSON field.
+pub fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl DedupReport {

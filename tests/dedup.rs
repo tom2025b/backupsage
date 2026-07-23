@@ -333,6 +333,11 @@ fn json_contract_field_names_are_stable() {
     ] {
         assert!(member.get(key).is_some(), "missing member key {key}");
     }
+    // `path_bytes` (added v1.0.1) is an optional sibling of `path`:
+    // lowercase hex of the raw path bytes, present only when the display
+    // path is a lossy rendering of a non-UTF-8 original. These fixtures
+    // use clean UTF-8 paths, so it must be absent here.
+    assert!(member.get("path_bytes").is_none());
     for key in [
         "groups",
         "duplicate_files",

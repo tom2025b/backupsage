@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::searcher;
 use crate::store;
@@ -187,6 +187,12 @@ pub fn open_at(path: &Path) -> Result<Master> {
                 conn.pragma_update(None, "application_id", MASTER_APPLICATION_ID)?;
             }
             init_master_conn(&conn)?;
+            // Supported migration (runs only after the identity gate above
+            // classified this file as a master): masters created before
+            // v1.0.1 lack the raw-path column.
+            if !crate::searcher::has_column(&conn, "files", "path_raw") {
+                conn.execute_batch("ALTER TABLE files ADD COLUMN path_raw BLOB")?;
+            }
             Ok(Master { conn })
         }
         MasterProbe::PerSourceIndex => bail!(
@@ -251,6 +257,7 @@ fn init_master_conn(conn: &Connection) -> Result<()> {
             archive_id   INTEGER NOT NULL REFERENCES archives(archive_id) ON DELETE CASCADE,
             file_id      INTEGER NOT NULL,
             path         TEXT NOT NULL,
+            path_raw     BLOB,
             entry_type   TEXT NOT NULL,
             kind         TEXT NOT NULL,
             size         INTEGER,
@@ -495,15 +502,31 @@ impl Master {
     /// The transactional body of [`Self::replicate`]; assumes `src` is
     /// attached. Split out so rollback/detach cleanup stays in one place.
     fn replicate_tx(&mut self, archive_id: i64) -> Result<u64> {
+        // Older per-source indexes have no path_raw column; replicate NULL.
+        let src_raw = if self
+            .conn
+            .prepare("SELECT 1 FROM src.pragma_table_xinfo('files') WHERE name = 'path_raw'")
+            .and_then(|mut s| s.query_row([], |_| Ok(())).optional())
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            "path_raw"
+        } else {
+            "NULL"
+        };
         self.conn.execute_batch("BEGIN")?;
         self.conn
             .execute("DELETE FROM files WHERE archive_id=?1", [archive_id])?;
         let n = self.conn.execute(
-            "INSERT INTO files (archive_id, file_id, path, entry_type, kind, size,
-                mtime_unix, exif_unix, exif_src, content_hash, phash, img_w, img_h, flags)
-             SELECT ?1, id, path, entry_type, kind, size, mtime_unix, exif_unix,
-                exif_src, content_hash, phash, img_w, img_h, flags
-             FROM src.files",
+            &format!(
+                "INSERT INTO files (archive_id, file_id, path, path_raw, entry_type, kind,
+                    size, mtime_unix, exif_unix, exif_src, content_hash, phash, img_w,
+                    img_h, flags)
+                 SELECT ?1, id, path, {src_raw}, entry_type, kind, size, mtime_unix,
+                    exif_unix, exif_src, content_hash, phash, img_w, img_h, flags
+                 FROM src.files"
+            ),
             [archive_id],
         )? as u64;
         self.conn.execute(

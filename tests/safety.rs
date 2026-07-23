@@ -264,6 +264,162 @@ fn master_open_validates_identity_before_write() {
     assert_eq!(appid, 0x4253_4147);
 }
 
+/// Tar carrying a member name full of ESC/OSC/CSI/BEL, control-laden
+/// content, and a symlink whose target embeds CSI.
+fn evil_tar(evil_name: &str, evil_content: &[u8], link_target: &str) -> Vec<u8> {
+    let mut ar = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(evil_content.len() as u64);
+    h.set_mode(0o644);
+    h.set_mtime(1_700_000_001);
+    ar.append_data(&mut h, evil_name, evil_content).unwrap();
+    let mut h2 = tar::Header::new_gnu();
+    h2.set_entry_type(tar::EntryType::Symlink);
+    h2.set_size(0);
+    h2.set_mode(0o777);
+    h2.set_mtime(1_700_000_001);
+    ar.append_link(&mut h2, "evil-link", link_target).unwrap();
+    ar.into_inner().unwrap()
+}
+
+fn assert_no_raw_controls(stream: &[u8], what: &str) {
+    let s = String::from_utf8_lossy(stream);
+    assert!(
+        !s.chars().any(|c| matches!(c,
+            '\u{0}'..='\u{8}' | '\u{b}'..='\u{1f}' | '\u{7f}'..='\u{9f}')),
+        "raw control in {what}: {s:?}"
+    );
+}
+
+#[test]
+fn terminal_output_contains_no_raw_controls() {
+    let d = tempfile::tempdir().unwrap();
+    // member name and content carrying ESC/CSI/OSC/C0
+    let evil_name = "e\x1b]0;pwned\x07vil\x1b[31m.txt";
+    let evil_content = b"BEL\x07 ESC\x1b[2J CSI txt searchable";
+    write_archive(
+        d.path(),
+        "a.tar",
+        &evil_tar(evil_name, evil_content, "targ\x1b[31met"),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "searchable", "-i", "a.tar.db", "-s"], d.path());
+    assert!(out.status.success());
+    assert_no_raw_controls(&out.stdout, "search stdout");
+    assert_no_raw_controls(&out.stderr, "search stderr");
+    // inspect echoes the (sanitized) name and any link target
+    for path in [evil_name, "evil-link"] {
+        let out = run(&["inspect", path, "-i", "a.tar.db"], d.path());
+        assert!(out.status.success(), "inspect {path:?}");
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(!s.contains('\x1b') && !s.contains('\x07'), "{s:?}");
+    }
+}
+
+#[test]
+fn ordinary_unicode_stays_readable() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(
+        d.path(),
+        "a.tar",
+        &build_tar(&[("días/naïve-写真.txt", b"unicode fine".to_vec())]),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "unicode", "-i", "a.tar.db"], d.path());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("días") && s.contains("写真"), "{s}");
+}
+
+fn unhex(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn json_round_trips_non_utf8_paths() {
+    let d = tempfile::tempdir().unwrap();
+    // invalid UTF-8 member name: "f" 0xFF 0xFE ".txt"
+    let raw_name: &[u8] = b"f\xff\xfe.txt";
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw_name));
+    let mut ar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(4);
+    header.set_mode(0o644);
+    header.set_mtime(1_700_000_001);
+    ar.append_data(&mut header, &name, &b"data"[..]).unwrap();
+    let mut h2 = tar::Header::new_gnu();
+    h2.set_size(4);
+    h2.set_mode(0o644);
+    h2.set_mtime(1_700_000_001);
+    ar.append_data(&mut h2, "plain2.txt", &b"data"[..]).unwrap();
+    write_archive(d.path(), "a.tar", &ar.into_inner().unwrap());
+
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+
+    // Ad-hoc search JSON: display field lossy but present; raw bytes
+    // round-trip exactly as lowercase hex.
+    let out = run(&["search", "data", "-i", "a.tar.db", "--json"], d.path());
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let hits = v["hits"].as_array().unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path hit present");
+    assert_eq!(unhex(hit["path_bytes"].as_str().unwrap()), raw_name);
+
+    // Raw bytes survive replication into a master: federated search JSON
+    // and the dedup report carry the same hex sibling field.
+    assert!(
+        run(&["--master", "m.db", "master", "add", "a.tar.db"], d.path())
+            .status
+            .success()
+    );
+    let out = run(
+        &["--master", "m.db", "search", "data", "--all", "--json"],
+        d.path(),
+    );
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let hits = v["archives"][0]["hits"].as_array().unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path federated hit present");
+    assert_eq!(unhex(hit["path_bytes"].as_str().unwrap()), raw_name);
+
+    let out = run(&["--master", "m.db", "dedup", "--json"], d.path());
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let members = v["groups"][0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    let lossy = members
+        .iter()
+        .find(|m| m["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path member present");
+    assert_eq!(unhex(lossy["path_bytes"].as_str().unwrap()), raw_name);
+    let clean = members.iter().find(|m| m["path"] == "plain2.txt").unwrap();
+    assert!(clean.get("path_bytes").is_none());
+}
+
+#[test]
+fn clean_utf8_paths_emit_no_bytes_field() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(
+        d.path(),
+        "a.tar",
+        &build_tar(&[("plain.txt", b"data".to_vec())]),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "data", "-i", "a.tar.db", "--json"], d.path());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert!(v["hits"][0].get("path_bytes").is_none() || v["hits"][0]["path_bytes"].is_null());
+    assert_eq!(v["hits"][0]["path"], "plain.txt");
+}
+
 #[test]
 fn cwd_fallback_refuses_foreign_db() {
     let d = tempfile::tempdir().unwrap();
