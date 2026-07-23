@@ -103,11 +103,12 @@ pub(crate) fn index_dir(
         if own_output {
             continue;
         }
-        let rel_path = abs
-            .strip_prefix(dir)
-            .unwrap_or(abs)
-            .to_string_lossy()
-            .into_owned();
+        // Lossless capture (same rule as the tar front-end): valid UTF-8
+        // stores text only; anything else stores lossy text + raw bytes.
+        let (rel_path, path_raw) = {
+            use std::os::unix::ffi::OsStrExt;
+            crate::store::capture_text(abs.strip_prefix(dir).unwrap_or(abs).as_os_str().as_bytes())
+        };
 
         entry_no += 1;
         pb.inc(1);
@@ -125,13 +126,20 @@ pub(crate) fn index_dir(
         let mode = md.as_ref().map(unix_mode);
 
         if walk_entry.file_type().is_symlink() {
-            let target = std::fs::read_link(abs)
-                .ok()
-                .map(|t| t.to_string_lossy().into_owned());
+            let (target, target_raw) = match std::fs::read_link(abs) {
+                Ok(t) => {
+                    use std::os::unix::ffi::OsStrExt;
+                    let (text, raw) = crate::store::capture_text(t.as_os_str().as_bytes());
+                    (Some(text), raw)
+                }
+                Err(_) => (None, None),
+            };
             let rec = EntryRecord {
                 path: &rel_path,
+                path_raw: path_raw.as_deref(),
                 entry_type: "symlink",
                 link_target: target.as_deref(),
+                link_target_raw: target_raw.as_deref(),
                 size: 0,
                 mtime_unix: mtime,
                 mode,
@@ -183,8 +191,10 @@ pub(crate) fn index_dir(
 
         let rec = EntryRecord {
             path: &rel_path,
+            path_raw: path_raw.as_deref(),
             entry_type: "file",
             link_target: None,
+            link_target_raw: None,
             size,
             mtime_unix: mtime,
             mode,

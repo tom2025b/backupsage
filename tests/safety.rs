@@ -330,6 +330,96 @@ fn ordinary_unicode_stays_readable() {
     assert!(s.contains("días") && s.contains("写真"), "{s}");
 }
 
+fn unhex(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn json_round_trips_non_utf8_paths() {
+    let d = tempfile::tempdir().unwrap();
+    // invalid UTF-8 member name: "f" 0xFF 0xFE ".txt"
+    let raw_name: &[u8] = b"f\xff\xfe.txt";
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(raw_name));
+    let mut ar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(4);
+    header.set_mode(0o644);
+    header.set_mtime(1_700_000_001);
+    ar.append_data(&mut header, &name, &b"data"[..]).unwrap();
+    let mut h2 = tar::Header::new_gnu();
+    h2.set_size(4);
+    h2.set_mode(0o644);
+    h2.set_mtime(1_700_000_001);
+    ar.append_data(&mut h2, "plain2.txt", &b"data"[..]).unwrap();
+    write_archive(d.path(), "a.tar", &ar.into_inner().unwrap());
+
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+
+    // Ad-hoc search JSON: display field lossy but present; raw bytes
+    // round-trip exactly as lowercase hex.
+    let out = run(&["search", "data", "-i", "a.tar.db", "--json"], d.path());
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let hits = v["hits"].as_array().unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path hit present");
+    assert_eq!(unhex(hit["path_bytes"].as_str().unwrap()), raw_name);
+
+    // Raw bytes survive replication into a master: federated search JSON
+    // and the dedup report carry the same hex sibling field.
+    assert!(
+        run(&["--master", "m.db", "master", "add", "a.tar.db"], d.path())
+            .status
+            .success()
+    );
+    let out = run(
+        &["--master", "m.db", "search", "data", "--all", "--json"],
+        d.path(),
+    );
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let hits = v["archives"][0]["hits"].as_array().unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path federated hit present");
+    assert_eq!(unhex(hit["path_bytes"].as_str().unwrap()), raw_name);
+
+    let out = run(&["--master", "m.db", "dedup", "--json"], d.path());
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let members = v["groups"][0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    let lossy = members
+        .iter()
+        .find(|m| m["path"].as_str().unwrap().contains('\u{FFFD}'))
+        .expect("lossy-path member present");
+    assert_eq!(unhex(lossy["path_bytes"].as_str().unwrap()), raw_name);
+    let clean = members.iter().find(|m| m["path"] == "plain2.txt").unwrap();
+    assert!(clean.get("path_bytes").is_none());
+}
+
+#[test]
+fn clean_utf8_paths_emit_no_bytes_field() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(
+        d.path(),
+        "a.tar",
+        &build_tar(&[("plain.txt", b"data".to_vec())]),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "data", "-i", "a.tar.db", "--json"], d.path());
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    assert!(v["hits"][0].get("path_bytes").is_none() || v["hits"][0]["path_bytes"].is_null());
+    assert_eq!(v["hits"][0]["path"], "plain.txt");
+}
+
 #[test]
 fn cwd_fallback_refuses_foreign_db() {
     let d = tempfile::tempdir().unwrap();

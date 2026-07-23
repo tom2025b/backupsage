@@ -107,15 +107,7 @@ fn run() -> Result<i32> {
                 );
             }
             if args.json {
-                let hits: Vec<serde_json::Value> = outcome
-                    .hits
-                    .iter()
-                    .map(|h| {
-                        serde_json::json!({
-                            "path": h.path, "matches": h.matches, "snippet": h.snippet,
-                        })
-                    })
-                    .collect();
+                let hits: Vec<serde_json::Value> = outcome.hits.iter().map(hit_json).collect();
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
@@ -663,6 +655,18 @@ fn print_master_table(rows: &[master::ArchiveRow]) {
     println!("{table}");
 }
 
+/// One search hit as JSON. `path_bytes` (lowercase hex of the raw path)
+/// appears only when the display path is a lossy rendering.
+fn hit_json(h: &searcher::SearchHit) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "path": h.path, "matches": h.matches, "snippet": h.snippet,
+    });
+    if let Some(raw) = &h.path_raw {
+        v["path_bytes"] = serde_json::Value::String(backupsage::report::to_hex(raw));
+    }
+    v
+}
+
 fn search_all_json(outcome: &searcher::FederatedOutcome) -> String {
     let archives: Vec<serde_json::Value> = outcome
         .per_archive
@@ -671,9 +675,7 @@ fn search_all_json(outcome: &searcher::FederatedOutcome) -> String {
             serde_json::json!({
                 "archive": f.archive_label,
                 "truncated": f.truncated,
-                "hits": f.hits.iter().map(|h| serde_json::json!({
-                    "path": h.path, "matches": h.matches, "snippet": h.snippet,
-                })).collect::<Vec<_>>(),
+                "hits": f.hits.iter().map(hit_json).collect::<Vec<_>>(),
             })
         })
         .collect();

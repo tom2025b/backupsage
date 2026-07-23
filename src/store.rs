@@ -45,9 +45,14 @@ pub struct SourceMeta<'a> {
 /// still inserted so the path stays searchable.
 pub struct EntryRecord<'a> {
     pub path: &'a str,
+    /// Raw path bytes, only when `path` is a lossy rendering (the
+    /// original was not valid UTF-8); NULL for clean paths.
+    pub path_raw: Option<&'a [u8]>,
     /// `"file"` | `"symlink"` | `"hardlink"`.
     pub entry_type: &'a str,
     pub link_target: Option<&'a str>,
+    /// Raw link-target bytes, same rule as `path_raw`.
+    pub link_target_raw: Option<&'a [u8]>,
     pub size: u64,
     pub mtime_unix: Option<i64>,
     pub mode: Option<u32>,
@@ -61,6 +66,19 @@ pub struct EntryRecord<'a> {
     pub exif_src: Option<&'a str>,
     pub flags: i64,
     pub fts_content: &'a str,
+}
+
+/// Lossless text capture for ingestion: valid UTF-8 yields the text and
+/// no raw copy (column stays NULL); anything else yields the lossy
+/// rendering for display plus the exact original bytes.
+pub fn capture_text(raw: &[u8]) -> (String, Option<Vec<u8>>) {
+    match std::str::from_utf8(raw) {
+        Ok(s) => (s.to_owned(), None),
+        Err(_) => (
+            String::from_utf8_lossy(raw).into_owned(),
+            Some(raw.to_vec()),
+        ),
+    }
 }
 
 /// Totals recorded into meta by [`finalize_v3`].
@@ -109,8 +127,10 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
         CREATE TABLE files (
             id            INTEGER PRIMARY KEY,
             path          TEXT NOT NULL,
+            path_raw      BLOB,
             entry_type    TEXT NOT NULL,
             link_target   TEXT,
+            link_target_raw BLOB,
             size          INTEGER NOT NULL DEFAULT 0,
             mtime_unix    INTEGER,
             mode          INTEGER,
@@ -150,6 +170,9 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
     set_meta(&conn, "media_cap", &meta.media_cap.to_string())?;
     set_meta(&conn, "created_unix", &created.to_string())?;
     set_meta(&conn, "word_stats", if meta.word_stats { "1" } else { "0" })?;
+    // This index captures raw path bytes (v1.0.1); readers treat the
+    // columns as NULL on older indexes.
+    set_meta(&conn, "path_raw", "1")?;
     set_meta(&conn, "completed", "0")?;
 
     // Stat the source itself (archive-vs-index staleness, spec §6).
@@ -168,15 +191,17 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
 /// Insert one entry; returns `files.id` (== the FTS rowid).
 pub fn insert_entry(conn: &Connection, rec: &EntryRecord) -> Result<i64> {
     let mut stmt = conn.prepare_cached(
-        "INSERT INTO files (path, entry_type, link_target, size, mtime_unix, mode,
-                            kind, content_hash, img_w, img_h, phash, exif_unix,
-                            exif_src, flags)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        "INSERT INTO files (path, path_raw, entry_type, link_target, link_target_raw,
+                            size, mtime_unix, mode, kind, content_hash, img_w, img_h,
+                            phash, exif_unix, exif_src, flags)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
     )?;
     stmt.execute(params![
         rec.path,
+        rec.path_raw,
         rec.entry_type,
         rec.link_target,
+        rec.link_target_raw,
         rec.size as i64,
         rec.mtime_unix,
         rec.mode,
@@ -295,8 +320,10 @@ mod tests {
     fn entry<'a>(path: &'a str, content: &'a str, hash_byte: u8) -> EntryRecord<'a> {
         EntryRecord {
             path,
+            path_raw: None,
             entry_type: "file",
             link_target: None,
+            link_target_raw: None,
             size: content.len() as u64,
             mtime_unix: Some(1_700_000_000),
             mode: Some(0o644),

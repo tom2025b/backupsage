@@ -8,10 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 pub struct SearchHit {
     pub path: String,
+    /// Raw path bytes when `path` is a lossy rendering of a non-UTF-8
+    /// original; None on clean paths and on indexes without the column.
+    pub path_raw: Option<Vec<u8>>,
     /// Matches within the file content (matches in the path count as 0).
     pub matches: i64,
     pub snippet: Option<String>,
@@ -79,6 +82,19 @@ pub fn index_completed(conn: &Connection) -> Option<bool> {
     get_meta(conn, "completed").map(|v| v == "1")
 }
 
+/// True if `table` exists and has a column named `col`. Uses
+/// `pragma_table_xinfo` — `table_info` hides generated columns, and the
+/// master's `files` table carries virtual pHash bands.
+pub(crate) fn has_column(conn: &Connection, table: &str, col: &str) -> bool {
+    conn.prepare(&format!(
+        "SELECT 1 FROM pragma_table_xinfo('{table}') WHERE name = ?1"
+    ))
+    .and_then(|mut s| s.query_row([col], |_| Ok(())).optional())
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 // ── Search ───────────────────────────────────────────────────────────────────
 
 /// Search the index. Invalid FTS5 syntax is retried as a quoted literal
@@ -122,17 +138,27 @@ fn run_match(
     } else {
         ""
     };
+    // Raw path bytes ride beside the display path on indexes that have
+    // the column (v1.0.1+); older indexes and v2 simply yield None.
+    let with_raw = has_column(conn, "files", "path_raw");
+    let raw_col = if with_raw {
+        ", (SELECT f.path_raw FROM files f WHERE f.id = files_fts.rowid)"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             path,
             (length(highlight(files_fts, 1, char(1), char(1))) -
              length(replace(highlight(files_fts, 1, char(1), char(1)), char(1), ''))) / 2
             {snippet_col}
+            {raw_col}
          FROM files_fts
          WHERE files_fts MATCH ?1
          ORDER BY rank
          LIMIT ?2"
     );
+    let raw_idx = if snippets { 3 } else { 2 };
     let mut stmt = conn.prepare(&sql)?;
     // Fetch one extra row to know whether the limit cut anything off.
     let mut rows = stmt.query(params![query, (limit + 1) as i64])?;
@@ -140,6 +166,7 @@ fn run_match(
     while let Some(row) = rows.next()? {
         hits.push(SearchHit {
             path: row.get(0)?,
+            path_raw: if with_raw { row.get(raw_idx)? } else { None },
             matches: row.get(1)?,
             snippet: if snippets { row.get(2)? } else { None },
         });

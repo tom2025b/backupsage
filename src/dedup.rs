@@ -80,6 +80,7 @@ struct Row {
     archive_indexed_unix: Option<i64>,
     file_id: i64,
     path: String,
+    path_raw: Option<Vec<u8>>,
     entry_type: String,
     kind: String,
     size: u64,
@@ -297,6 +298,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 archive_label: r.archive_label.clone(),
                 file_id: r.file_id,
                 path: r.path.clone(),
+                path_bytes: r.path_raw.as_deref().map(crate::report::to_hex),
                 kind: r.kind.clone(),
                 size: r.size,
                 content_hash: r.content_hash.as_ref().map(|h| format!("b3:{}", hex(h))),
@@ -469,9 +471,9 @@ fn scope_clause(scope_ids: &[i64]) -> String {
 
 fn fetch_scope(master: &Master, p: &DedupParams, scope_ids: &[i64]) -> Result<Vec<Row>> {
     let mut sql = String::from(
-        "SELECT f.archive_id, a.label, a.indexed_unix, f.file_id, f.path, f.entry_type,
-                f.kind, f.size, f.mtime_unix, f.exif_unix, f.exif_src, f.content_hash,
-                f.phash, f.img_w, f.img_h, f.flags
+        "SELECT f.archive_id, a.label, a.indexed_unix, f.file_id, f.path, f.path_raw,
+                f.entry_type, f.kind, f.size, f.mtime_unix, f.exif_unix, f.exif_src,
+                f.content_hash, f.phash, f.img_w, f.img_h, f.flags
          FROM files f JOIN archives a ON a.archive_id = f.archive_id
          WHERE f.content_hash IS NOT NULL
            AND f.entry_type != 'symlink'
@@ -533,17 +535,18 @@ fn fetch_scope(master: &Master, p: &DedupParams, scope_ids: &[i64]) -> Result<Ve
                     archive_indexed_unix: r.get(2)?,
                     file_id: r.get(3)?,
                     path: r.get(4)?,
-                    entry_type: r.get(5)?,
-                    kind: r.get(6)?,
-                    size: r.get::<_, i64>(7)? as u64,
-                    mtime_unix: r.get(8)?,
-                    exif_unix: r.get(9)?,
-                    exif_src: r.get(10)?,
-                    content_hash: r.get(11)?,
-                    phash: r.get(12)?,
-                    img_w: r.get(13)?,
-                    img_h: r.get(14)?,
-                    flags: r.get(15)?,
+                    path_raw: r.get(5)?,
+                    entry_type: r.get(6)?,
+                    kind: r.get(7)?,
+                    size: r.get::<_, i64>(8)? as u64,
+                    mtime_unix: r.get(9)?,
+                    exif_unix: r.get(10)?,
+                    exif_src: r.get(11)?,
+                    content_hash: r.get(12)?,
+                    phash: r.get(13)?,
+                    img_w: r.get(14)?,
+                    img_h: r.get(15)?,
+                    flags: r.get(16)?,
                 })
             },
         )?

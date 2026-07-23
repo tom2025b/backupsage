@@ -614,10 +614,9 @@ fn index_tar(
             continue; // directories, device nodes, fifos, pax metadata
         }
 
-        let entry_path = entry
-            .path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| String::from("<unreadable-path>"));
+        // Lossless capture: valid UTF-8 stores text only (raw NULL);
+        // anything else stores the lossy rendering plus the raw bytes.
+        let (entry_path, path_raw) = store::capture_text(&entry.path_bytes());
 
         entry_no += 1;
         if entry_no % 64 == 1 {
@@ -628,19 +627,23 @@ fn index_tar(
         let mode = entry.header().mode().ok();
 
         if name_only_entry {
-            let link_target = entry
-                .link_name()
-                .ok()
-                .flatten()
-                .map(|p| p.to_string_lossy().into_owned());
+            let (link_target, link_target_raw) = match entry.link_name_bytes() {
+                Some(b) => {
+                    let (text, raw) = store::capture_text(&b);
+                    (Some(text), raw)
+                }
+                None => (None, None),
+            };
             let rec = EntryRecord {
                 path: &entry_path,
+                path_raw: path_raw.as_deref(),
                 entry_type: if entry_type == tar::EntryType::Link {
                     "hardlink"
                 } else {
                     "symlink"
                 },
                 link_target: link_target.as_deref(),
+                link_target_raw: link_target_raw.as_deref(),
                 size: 0,
                 mtime_unix: mtime,
                 mode,
@@ -682,8 +685,10 @@ fn index_tar(
 
         let rec = EntryRecord {
             path: &entry_path,
+            path_raw: path_raw.as_deref(),
             entry_type: "file",
             link_target: None,
+            link_target_raw: None,
             size,
             mtime_unix: mtime,
             mode,
