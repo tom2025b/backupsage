@@ -202,8 +202,20 @@ fn run() -> Result<i32> {
             };
             match &args.output {
                 Some(path) => {
-                    std::fs::write(path, rendered.as_bytes())
-                        .with_context(|| format!("cannot write {}", path.display()))?;
+                    // Everything dedup read is protected from the report
+                    // write: master + ad-hoc indexes (with sidecars), and
+                    // every registered index and source archive.
+                    let mut protected = backupsage::outpath::ProtectedSet::new();
+                    protected.add_db(&master_path);
+                    for db in &args.dbs {
+                        protected.add_db(db);
+                    }
+                    for a in m.list()? {
+                        protected.add_db(std::path::Path::new(&a.db_path));
+                        protected.add_file(std::path::Path::new(&a.source_path));
+                    }
+                    backupsage::outpath::write_new_file(path, rendered.as_bytes(), &protected)
+                        .context("dedup report not written")?;
                     eprintln!("report written to {}", path.display());
                 }
                 None => println!("{rendered}"),
