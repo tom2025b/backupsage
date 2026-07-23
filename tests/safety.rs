@@ -127,6 +127,60 @@ fn distinct_dest_and_same_source_reindex_succeed() {
 }
 
 #[test]
+fn dedup_output_never_clobbers() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(
+        d.path(),
+        "a.tar",
+        &build_tar(&[("f.txt", b"same".to_vec()), ("g.txt", b"same".to_vec())]),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let master = d.path().join("m.db");
+    let m = "m.db";
+    assert!(run(&["--master", m, "master", "add", "a.tar.db"], d.path())
+        .status
+        .success());
+    let mdig = digest_of(&master);
+    let adig = digest_of(&d.path().join("a.tar"));
+    let idig = digest_of(&d.path().join("a.tar.db"));
+
+    // -o at master, index, archive, and an existing unrelated file
+    fs::write(d.path().join("existing.txt"), b"keep me").unwrap();
+    for dest in ["m.db", "a.tar.db", "a.tar", "existing.txt"] {
+        let out = run(&["--master", m, "dedup", "-o", dest], d.path());
+        assert_eq!(out.status.code(), Some(1), "dest {dest}");
+    }
+    assert_eq!(digest_of(&master), mdig);
+    assert_eq!(digest_of(&d.path().join("a.tar")), adig);
+    assert_eq!(digest_of(&d.path().join("a.tar.db")), idig);
+    assert_eq!(fs::read(d.path().join("existing.txt")).unwrap(), b"keep me");
+
+    // symlink and hardlink aliases to the master are rejected, not unlinked
+    std::os::unix::fs::symlink(&master, d.path().join("alias.json")).unwrap();
+    fs::hard_link(&master, d.path().join("hard.json")).unwrap();
+    for dest in ["alias.json", "hard.json"] {
+        let out = run(&["--master", m, "dedup", "-o", dest], d.path());
+        assert_eq!(out.status.code(), Some(1), "dest {dest}");
+    }
+    assert!(fs::symlink_metadata(d.path().join("alias.json"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(digest_of(&master), mdig);
+
+    // a fresh distinct output receives the complete report, no staging debris
+    let out = run(
+        &["--master", m, "dedup", "--json", "-o", "report.json"],
+        d.path(),
+    );
+    assert!(out.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(d.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["version"], 1);
+    no_staging_debris(d.path());
+}
+
+#[test]
 fn cwd_fallback_refuses_foreign_db() {
     let d = tempfile::tempdir().unwrap();
     let ro = d.path().join("ro");
