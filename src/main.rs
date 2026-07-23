@@ -13,12 +13,15 @@ use backupsage::indexer::{self, IndexOptions, IndexSummary};
 use backupsage::master::{self, Master};
 use backupsage::report::DedupReport;
 use backupsage::searcher;
+use backupsage::textsafe::sanitize;
 
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
         Err(e) => {
-            eprintln!("error: {e:#}");
+            // The chain may embed untrusted text (paths, labels, SQLite
+            // messages quoting file bytes) — sanitize the whole render.
+            eprintln!("error: {}", sanitize(&format!("{e:#}")));
             std::process::exit(1);
         }
     }
@@ -77,14 +80,14 @@ fn run() -> Result<i32> {
                     let n = fed.hits.len();
                     println!(
                         "── {} — {n} hit(s){} ──",
-                        fed.archive_label,
+                        sanitize(&fed.archive_label),
                         if fed.truncated { ", more exist" } else { "" }
                     );
                     print_search_table(&fed.hits, args.snippets);
                     println!();
                 }
                 for (label, reason) in &outcome.skipped {
-                    eprintln!("note: {label}: {reason}");
+                    eprintln!("note: {}: {}", sanitize(label), sanitize(reason));
                 }
             }
             Ok(if outcome.skipped.is_empty() { 0 } else { 2 })
@@ -252,12 +255,16 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
             for t in &targets {
                 match m.add(t)? {
                     master::AddOutcome::Replicated { label, files } => {
-                        println!("registered '{label}' — {files} file records replicated");
+                        println!(
+                            "registered '{}' — {files} file records replicated",
+                            sanitize(&label)
+                        );
                     }
                     master::AddOutcome::V2Limited { label } => {
                         println!(
-                            "registered '{label}' as v2-limited — searchable, but it has no \
-                             hashes; re-index the archive to include it in dedup"
+                            "registered '{}' as v2-limited — searchable, but it has no \
+                             hashes; re-index the archive to include it in dedup",
+                            sanitize(&label)
                         );
                     }
                 }
@@ -296,7 +303,7 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
                 println!("All replicas up to date.");
             } else {
                 for (label, action) in &actions {
-                    println!("{label}: {action}");
+                    println!("{}: {}", sanitize(label), sanitize(action));
                 }
             }
             Ok(0)
@@ -327,7 +334,8 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
                     eprintln!(
                         "note: '{}' changed since it was indexed — re-run \
                          `backupsage index {}`",
-                        r.label, r.source_path
+                        sanitize(&r.label),
+                        sanitize(&r.source_path)
                     );
                 }
             }
@@ -396,16 +404,16 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
     println!("Index    : {}", db_path.display());
     println!(
         "Source   : {}",
-        searcher::get_meta(conn, "source").unwrap_or_default()
+        sanitize(&searcher::get_meta(conn, "source").unwrap_or_default())
     );
-    println!("Path     : {path}");
+    println!("Path     : {}", sanitize(path));
     for (i, row) in rows.iter().enumerate() {
         let (id, etype, kind, size, mtime, mode, hash, w, h, phash, exif, exif_src, fl, target) =
             row;
         if rows.len() > 1 {
             println!("── entry {} of {} (id {id}) ──", i + 1, rows.len());
         }
-        println!("Type     : {etype} ({kind})");
+        println!("Type     : {} ({})", sanitize(etype), sanitize(kind));
         println!("Size     : {} ({size} bytes)", human_bytes(*size as u64));
         if let Some(m) = mtime {
             println!("Mtime    : {} (tar header / fs)", fmt_unix(*m));
@@ -414,7 +422,7 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
             println!("Mode     : {m:o}");
         }
         if let Some(t) = target {
-            println!("Target   : {t}");
+            println!("Target   : {}", sanitize(t));
         }
         if let Some(hh) = hash {
             println!(
@@ -436,7 +444,7 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
             println!(
                 "EXIF     : {} ({})",
                 fmt_unix(*e),
-                exif_src.as_deref().unwrap_or("unknown field")
+                sanitize(exif_src.as_deref().unwrap_or("unknown field"))
             );
         }
         let mut markers = Vec::new();
@@ -561,8 +569,8 @@ fn render_dedup_report(r: &DedupReport) -> String {
                 out,
                 "  {:4}  {:<label_w$}  {:<path_w$}  {:>9}  {} {:<22} {}",
                 if m.keep { "KEEP" } else { "dup" },
-                truncate_middle(&m.archive_label, label_w),
-                truncate_middle(&m.path, path_w),
+                truncate_middle(&sanitize(&m.archive_label), label_w),
+                truncate_middle(&sanitize(&m.path), path_w),
                 human_bytes(m.size),
                 ts,
                 m.best_ts_source,
@@ -603,16 +611,21 @@ fn render_dedup_report(r: &DedupReport) -> String {
         );
     }
     for label in &s.archives_offline {
-        let _ = writeln!(out, "note: '{label}' is offline — dedup used its replica");
+        let _ = writeln!(
+            out,
+            "note: '{}' is offline — dedup used its replica",
+            sanitize(label)
+        );
     }
     for label in &s.archives_incomplete {
         let _ = writeln!(
             out,
-            "warning: '{label}' has an incomplete index — data is partial"
+            "warning: '{}' has an incomplete index — data is partial",
+            sanitize(label)
         );
     }
     for (label, reason) in &s.skipped_archives {
-        let _ = writeln!(out, "skipped: {label}: {reason}");
+        let _ = writeln!(out, "skipped: {}: {}", sanitize(label), sanitize(reason));
     }
     out
 }
@@ -638,13 +651,13 @@ fn print_master_table(rows: &[master::ArchiveRow]) {
         };
         table.add_row(vec![
             Cell::new(r.archive_id).set_alignment(CellAlignment::Right),
-            Cell::new(&r.label).add_attribute(Attribute::Bold),
-            Cell::new(&r.source_type),
+            Cell::new(sanitize(&r.label)).add_attribute(Attribute::Bold),
+            Cell::new(sanitize(&r.source_type)),
             Cell::new(format_number(r.files_count)).set_alignment(CellAlignment::Right),
             Cell::new(format!("v{}", r.schema_version)),
-            Cell::new(&r.status).fg(status_color),
+            Cell::new(sanitize(&r.status)).fg(status_color),
             Cell::new(r.indexed_unix.map(fmt_unix).unwrap_or_else(|| "-".into())),
-            Cell::new(&r.source_path).fg(Color::DarkGrey),
+            Cell::new(sanitize(&r.source_path)).fg(Color::DarkGrey),
         ]);
     }
     println!("{table}");
@@ -703,10 +716,10 @@ fn print_search_table(hits: &[searcher::SearchHit], snippets: bool) {
             Cell::new(hit.matches)
                 .set_alignment(CellAlignment::Right)
                 .fg(Color::Yellow),
-            Cell::new(&hit.path),
+            Cell::new(sanitize(&hit.path)),
         ];
         if snippets {
-            row.push(Cell::new(hit.snippet.as_deref().unwrap_or("")).fg(Color::DarkGrey));
+            row.push(Cell::new(sanitize(hit.snippet.as_deref().unwrap_or(""))).fg(Color::DarkGrey));
         }
         table.add_row(row);
     }

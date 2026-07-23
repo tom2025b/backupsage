@@ -288,7 +288,7 @@ pub fn discover_db_path(explicit: Option<&Path>, archive: Option<&Path>) -> Resu
             if ok {
                 eprintln!(
                     "hint: using index '{}' — pass --index to be explicit",
-                    p.display()
+                    crate::textsafe::sanitize(&p.display().to_string())
                 );
                 return Ok(p);
             }

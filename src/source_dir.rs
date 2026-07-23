@@ -78,7 +78,12 @@ pub(crate) fn index_dir(
         let walk_entry = match walk_entry {
             Ok(e) => e,
             Err(e) => {
-                pb.suspend(|| eprintln!("warning: cannot walk: {e}"));
+                pb.suspend(|| {
+                    eprintln!(
+                        "{}",
+                        crate::textsafe::sanitize(&format!("warning: cannot walk: {e}"))
+                    )
+                });
                 continue;
             }
         };
@@ -107,7 +112,7 @@ pub(crate) fn index_dir(
         entry_no += 1;
         pb.inc(1);
         if entry_no % 64 == 1 {
-            pb.set_message(truncate_path(&rel_path, 50));
+            pb.set_message(crate::textsafe::sanitize(&truncate_path(&rel_path, 50)).into_owned());
         }
 
         let md = walk_entry.metadata().ok();
@@ -148,12 +153,19 @@ pub(crate) fn index_dir(
         let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
         let outcome = match File::open(abs) {
             Ok(mut f) => process_reader(&mut f, size, &rel_path, opts, &mut |msg| {
-                pb.suspend(|| eprintln!("{msg}"))
+                pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
             }),
             Err(e) => {
                 // Unreadable file: warn-and-continue with a name-only row,
                 // mirroring the tar front-end's read-error handling.
-                pb.suspend(|| eprintln!("warning: cannot open '{rel_path}': {e}"));
+                pb.suspend(|| {
+                    eprintln!(
+                        "{}",
+                        crate::textsafe::sanitize(&format!(
+                            "warning: cannot open '{rel_path}': {e}"
+                        ))
+                    )
+                });
                 crate::indexer::EntryOutcome {
                     content_hash: None,
                     kind: "binary",

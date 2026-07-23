@@ -470,10 +470,15 @@ pub(crate) fn create_db_with_fallback(
         Ok(pair) => Ok(pair),
         Err(e) if explicit_db.is_none() => {
             let fallback = PathBuf::from(db_file_name(source));
+            // The chain can quote untrusted stored meta (a foreign index's
+            // "source" value) — sanitize the whole rendered message.
             eprintln!(
-                "warning: cannot create index at '{}' ({e:#}) — using './{}'",
-                db_path.display(),
-                fallback.display()
+                "{}",
+                crate::textsafe::sanitize(&format!(
+                    "warning: cannot create index at '{}' ({e:#}) — using './{}'",
+                    db_path.display(),
+                    fallback.display()
+                ))
             );
             create_staged_db(&fallback, &meta, &protected)
         }
@@ -616,7 +621,7 @@ fn index_tar(
 
         entry_no += 1;
         if entry_no % 64 == 1 {
-            pb.set_message(truncate_path(&entry_path, 50));
+            pb.set_message(crate::textsafe::sanitize(&truncate_path(&entry_path, 50)).into_owned());
         }
 
         let mtime = entry.header().mtime().ok().map(|m| m as i64);
@@ -671,7 +676,7 @@ fn index_tar(
 
         let size = entry.size();
         let mut outcome = process_reader(&mut entry, size, &entry_path, opts, &mut |msg| {
-            pb.suspend(|| eprintln!("{msg}"))
+            pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
         });
         outcome.flags |= extra_flags;
 

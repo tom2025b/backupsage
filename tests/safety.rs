@@ -264,6 +264,72 @@ fn master_open_validates_identity_before_write() {
     assert_eq!(appid, 0x4253_4147);
 }
 
+/// Tar carrying a member name full of ESC/OSC/CSI/BEL, control-laden
+/// content, and a symlink whose target embeds CSI.
+fn evil_tar(evil_name: &str, evil_content: &[u8], link_target: &str) -> Vec<u8> {
+    let mut ar = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(evil_content.len() as u64);
+    h.set_mode(0o644);
+    h.set_mtime(1_700_000_001);
+    ar.append_data(&mut h, evil_name, evil_content).unwrap();
+    let mut h2 = tar::Header::new_gnu();
+    h2.set_entry_type(tar::EntryType::Symlink);
+    h2.set_size(0);
+    h2.set_mode(0o777);
+    h2.set_mtime(1_700_000_001);
+    ar.append_link(&mut h2, "evil-link", link_target).unwrap();
+    ar.into_inner().unwrap()
+}
+
+fn assert_no_raw_controls(stream: &[u8], what: &str) {
+    let s = String::from_utf8_lossy(stream);
+    assert!(
+        !s.chars().any(|c| matches!(c,
+            '\u{0}'..='\u{8}' | '\u{b}'..='\u{1f}' | '\u{7f}'..='\u{9f}')),
+        "raw control in {what}: {s:?}"
+    );
+}
+
+#[test]
+fn terminal_output_contains_no_raw_controls() {
+    let d = tempfile::tempdir().unwrap();
+    // member name and content carrying ESC/CSI/OSC/C0
+    let evil_name = "e\x1b]0;pwned\x07vil\x1b[31m.txt";
+    let evil_content = b"BEL\x07 ESC\x1b[2J CSI txt searchable";
+    write_archive(
+        d.path(),
+        "a.tar",
+        &evil_tar(evil_name, evil_content, "targ\x1b[31met"),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "searchable", "-i", "a.tar.db", "-s"], d.path());
+    assert!(out.status.success());
+    assert_no_raw_controls(&out.stdout, "search stdout");
+    assert_no_raw_controls(&out.stderr, "search stderr");
+    // inspect echoes the (sanitized) name and any link target
+    for path in [evil_name, "evil-link"] {
+        let out = run(&["inspect", path, "-i", "a.tar.db"], d.path());
+        assert!(out.status.success(), "inspect {path:?}");
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(!s.contains('\x1b') && !s.contains('\x07'), "{s:?}");
+    }
+}
+
+#[test]
+fn ordinary_unicode_stays_readable() {
+    let d = tempfile::tempdir().unwrap();
+    write_archive(
+        d.path(),
+        "a.tar",
+        &build_tar(&[("días/naïve-写真.txt", b"unicode fine".to_vec())]),
+    );
+    assert!(run(&["index", "a.tar"], d.path()).status.success());
+    let out = run(&["search", "unicode", "-i", "a.tar.db"], d.path());
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("días") && s.contains("写真"), "{s}");
+}
+
 #[test]
 fn cwd_fallback_refuses_foreign_db() {
     let d = tempfile::tempdir().unwrap();
