@@ -34,6 +34,17 @@ pub fn write_archive(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
+/// BLAKE3 hex digest of a file's bytes.
+pub fn digest_of(path: &Path) -> String {
+    blake3::hash(&fs::read(path).unwrap()).to_hex().to_string()
+}
+
+/// Inode number (identity) of the entry at `path` itself (no follow).
+pub fn inode_of(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).unwrap().ino()
+}
+
 /// Deterministic small PNG whose pixels vary with `seed`.
 pub fn png_bytes(seed: u32, w: u32, h: u32) -> Vec<u8> {
     let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(w, h, |x, y| {

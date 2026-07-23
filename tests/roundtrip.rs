@@ -321,10 +321,16 @@ fn corrupt_entry_header_aborts_and_marks_index_incomplete() {
         "got: {err:#}"
     );
 
-    // The partial database must not claim completeness.
+    // v1.0.1: the failed build stays in its staging file and is removed —
+    // no partial database (or sidecar debris) appears at the final path.
     let db_path = indexer::resolve_db_path(&archive, None);
-    let conn = searcher::open_index(&db_path).unwrap();
-    assert_eq!(searcher::index_completed(&conn), Some(false));
+    assert!(!db_path.exists());
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n != "corrupt.tar")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[test]

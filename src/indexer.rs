@@ -24,6 +24,7 @@ use rusqlite::Connection;
 
 use crate::exif_date::{self, MediaKind};
 use crate::format::{self, Format};
+use crate::outpath;
 use crate::phash;
 use crate::store::{self, flags, EntryRecord, FinalizeCounts, SourceMeta};
 
@@ -340,14 +341,117 @@ impl<'a> IndexRun<'a> {
     }
 }
 
-/// Create the database, falling back to the current directory when the
-/// default location is not writable (e.g. archive on a read-only mount).
+/// Staged/final destination pair for one index build. The database is
+/// built at `staged` (same directory as `final_path`) and only replaces
+/// `final_path` via [`IndexPaths::promote`] once complete; dropping the
+/// pair without promoting removes the staged files, so a failed or
+/// interrupted build never touches the last completed index.
+pub(crate) struct IndexPaths {
+    pub staged: PathBuf,
+    pub final_path: PathBuf,
+    promoted: bool,
+}
+
+impl IndexPaths {
+    /// Atomically replace `final_path` with the completed staged index,
+    /// then drop stale sidecars of the replaced index (ownership of
+    /// `final_path` was verified before the build started).
+    pub(crate) fn promote(mut self) -> Result<()> {
+        outpath::promote_replace(&self.staged, &self.final_path)?;
+        self.promoted = true;
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(outpath::sidecar(&self.final_path, suffix));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for IndexPaths {
+    fn drop(&mut self) {
+        if !self.promoted {
+            for p in [
+                self.staged.clone(),
+                outpath::sidecar(&self.staged, "-wal"),
+                outpath::sidecar(&self.staged, "-shm"),
+            ] {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+}
+
+/// If something already exists at `dest` it must be a BackupSage index
+/// of THIS source; anything else is refused unchanged.
+fn assert_replaceable_index(dest: &Path, source: &Path, source_type: &str) -> Result<()> {
+    if std::fs::symlink_metadata(dest).is_err() {
+        return Ok(()); // nothing there — plain create
+    }
+    let conn = crate::searcher::open_index(dest).with_context(|| {
+        format!(
+            "existing file '{}' is not a BackupSage index; refusing to replace it",
+            dest.display()
+        )
+    })?;
+    let stored_type =
+        crate::searcher::get_meta(&conn, "source_type").unwrap_or_else(|| "tar".into());
+    let stored = crate::searcher::get_meta(&conn, "source")
+        .or_else(|| crate::searcher::get_meta(&conn, "archive"))
+        .unwrap_or_default();
+    let same = stored_type == source_type
+        && match (Path::new(&stored).canonicalize(), source.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+    if !same {
+        anyhow::bail!(
+            "existing index '{}' belongs to source '{}', not '{}'; refusing to replace it",
+            dest.display(),
+            stored,
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+/// Gate a candidate final destination against the protected set, verify
+/// ownership of anything already there, and create the staged database
+/// beside it.
+fn create_staged_db(
+    final_path: &Path,
+    meta: &SourceMeta,
+    protected: &outpath::ProtectedSet,
+) -> Result<(IndexPaths, Connection)> {
+    protected.check_db_dest(final_path)?;
+    assert_replaceable_index(final_path, meta.source, meta.source_type)?;
+    let staged = outpath::stage_path(final_path);
+    // The staged namespace is ours alone: clear crashed-run debris only.
+    for p in [
+        staged.clone(),
+        outpath::sidecar(&staged, "-wal"),
+        outpath::sidecar(&staged, "-shm"),
+    ] {
+        let _ = std::fs::remove_file(&p);
+    }
+    let conn = store::create_v3(&staged, meta)?;
+    Ok((
+        IndexPaths {
+            staged,
+            final_path: final_path.to_path_buf(),
+            promoted: false,
+        },
+        conn,
+    ))
+}
+
+/// Choose and gate the destination, falling back to the current
+/// directory when the default location is not writable (e.g. archive on
+/// a read-only mount). The fallback passes the same safety gate.
 pub(crate) fn create_db_with_fallback(
     source: &Path,
     explicit_db: Option<&Path>,
     meta_type: &str,
     opts: &IndexOptions,
-) -> Result<(Connection, PathBuf)> {
+) -> Result<(IndexPaths, Connection)> {
     let db_path = resolve_db_path(source, explicit_db);
     let meta = SourceMeta {
         source,
@@ -356,8 +460,14 @@ pub(crate) fn create_db_with_fallback(
         media_cap: opts.media_cap,
         word_stats: opts.word_stats,
     };
-    match store::create_v3(&db_path, &meta) {
-        Ok(conn) => Ok((conn, db_path)),
+    let mut protected = outpath::ProtectedSet::new();
+    if meta_type == "dir" {
+        protected.add_dir_tree(source);
+    } else {
+        protected.add_file(source);
+    }
+    match create_staged_db(&db_path, &meta, &protected) {
+        Ok(pair) => Ok(pair),
         Err(e) if explicit_db.is_none() => {
             let fallback = PathBuf::from(db_file_name(source));
             eprintln!(
@@ -365,8 +475,7 @@ pub(crate) fn create_db_with_fallback(
                 db_path.display(),
                 fallback.display()
             );
-            let conn = store::create_v3(&fallback, &meta)?;
-            Ok((conn, fallback))
+            create_staged_db(&fallback, &meta, &protected)
         }
         Err(e) => Err(e),
     }
@@ -436,7 +545,8 @@ fn index_tar(
     opts: &IndexOptions,
 ) -> Result<IndexSummary> {
     let fmt = format::detect_file(archive_path)?;
-    let (conn, db_path) = create_db_with_fallback(archive_path, explicit_db, "tar", opts)?;
+    let (paths, conn) = create_db_with_fallback(archive_path, explicit_db, "tar", opts)?;
+    let db_path = paths.final_path.clone();
 
     println!("Archive : {} ({fmt})", archive_path.display());
     println!("Index   : {}", db_path.display());
@@ -595,6 +705,8 @@ fn index_tar(
 
     run.finish(Some(&archive_blake3))?;
     pb.finish_with_message("done");
+    drop(conn); // close the staged database before promoting it
+    paths.promote()?;
     Ok(summary)
 }
 

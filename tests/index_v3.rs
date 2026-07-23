@@ -267,16 +267,11 @@ fn directory_source_end_to_end() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].path, "2023/note.txt");
 
-    // Self-exclusion: an explicit db inside the source is not indexed.
+    // Destination containment (v1.0.1): an explicit db inside the source
+    // directory is refused outright — it would contaminate future backups
+    // of the source — and nothing is created there.
     let inner_db = src.join("self.db");
-    let s2 = indexer::run_index(&src, Some(&inner_db), &IndexOptions::default()).unwrap();
-    let conn2 = searcher::open_index(&s2.db_path).unwrap();
-    let n: i64 = conn2
-        .query_row(
-            "SELECT COUNT(*) FROM files WHERE path LIKE '%self.db%'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(n, 0);
+    let err = indexer::run_index(&src, Some(&inner_db), &IndexOptions::default());
+    assert!(err.is_err());
+    assert!(!inner_db.exists());
 }
