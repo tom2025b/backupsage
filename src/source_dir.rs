@@ -21,8 +21,25 @@ pub(crate) fn index_dir(
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
 ) -> Result<IndexSummary> {
-    let (conn, db_path) = create_db_with_fallback(dir, explicit_db, "dir", opts)?;
-    let db_canon = db_path.canonicalize().unwrap_or_else(|_| db_path.clone());
+    let (paths, conn) = create_db_with_fallback(dir, explicit_db, "dir", opts)?;
+    let db_path = paths.final_path.clone();
+    // Names to skip during the walk: the final output and the staged
+    // build (plus their live WAL/SHM siblings), in the output directory.
+    let skip_names: Vec<String> = [&paths.final_path, &paths.staged]
+        .iter()
+        .filter_map(|p| p.file_name())
+        .flat_map(|n| {
+            let n = n.to_string_lossy();
+            [n.to_string(), format!("{n}-wal"), format!("{n}-shm")]
+        })
+        .collect();
+    let out_dir_canon = paths
+        .final_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."))
+        .canonicalize()
+        .ok();
 
     println!("Source  : {} (directory)", dir.display());
     println!("Index   : {}", db_path.display());
@@ -69,18 +86,15 @@ pub(crate) fn index_dir(
             continue;
         }
         let abs = walk_entry.path();
-        // Never index our own output file — including its live WAL/SHM
-        // siblings while the build is in progress.
-        let own_output = abs.file_name().is_some_and(|n| {
-            let n = n.to_string_lossy();
-            db_canon.file_name().is_some_and(|db_name| {
-                let db_name = db_name.to_string_lossy();
-                n == db_name || n == format!("{db_name}-wal") || n == format!("{db_name}-shm")
-            })
-        }) && abs
-            .parent()
-            .and_then(|p| p.canonicalize().ok())
-            .is_some_and(|p| Some(p.as_path()) == db_canon.parent());
+        // Never index our own output — the staged build and the final
+        // index, including their live WAL/SHM siblings.
+        let own_output = abs
+            .file_name()
+            .is_some_and(|n| skip_names.iter().any(|s| *s == n.to_string_lossy()))
+            && abs
+                .parent()
+                .and_then(|p| p.canonicalize().ok())
+                .is_some_and(|p| Some(p) == out_dir_canon);
         if own_output {
             continue;
         }
@@ -179,6 +193,8 @@ pub(crate) fn index_dir(
     run.finish(None)
         .context("failed to finalise directory index")?;
     pb.finish_with_message("done");
+    drop(conn); // close the staged database before promoting it
+    paths.promote()?;
     Ok(summary)
 }
 

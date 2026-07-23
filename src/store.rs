@@ -71,17 +71,15 @@ pub struct FinalizeCounts {
     pub files_truncated: u64,
 }
 
-/// Delete any stale database (plus WAL/SHM) and create a fresh v3 schema.
+/// Create a fresh v3 schema at a path where nothing exists yet. Callers
+/// stage into a private temporary name and promote on completion — this
+/// function never deletes or replaces anything (v1.0.1 safety boundary).
 pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
-    for stale in [
-        db_path.to_path_buf(),
-        sibling(db_path, "-wal"),
-        sibling(db_path, "-shm"),
-    ] {
-        if stale.exists() {
-            fs::remove_file(&stale)
-                .with_context(|| format!("failed to remove old index file: {}", stale.display()))?;
-        }
+    if fs::symlink_metadata(db_path).is_ok() {
+        anyhow::bail!(
+            "internal error: create_v3 called on existing path '{}'",
+            db_path.display()
+        );
     }
 
     let conn = Connection::open(db_path)
@@ -278,12 +276,6 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// v0.1 database that predates the meta table.
 pub fn schema_version(conn: &Connection) -> Option<i64> {
     crate::searcher::get_meta(conn, "schema_version").and_then(|v| v.parse().ok())
-}
-
-fn sibling(db_path: &Path, suffix: &str) -> std::path::PathBuf {
-    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
-    name.push(suffix);
-    db_path.with_file_name(name)
 }
 
 #[cfg(test)]

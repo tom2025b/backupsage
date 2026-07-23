@@ -9,6 +9,7 @@ pub mod exif_date;
 pub mod format;
 pub mod indexer;
 pub mod master;
+pub mod outpath;
 pub mod phash;
 pub mod report;
 pub mod searcher;
