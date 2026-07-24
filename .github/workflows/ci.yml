@@ -29,6 +29,11 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    # audit-check reports advisories as a check run; that API needs checks:write,
+    # which the read-only default token does not carry.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2
