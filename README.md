@@ -136,7 +136,8 @@ in one tar is reported as intra-archive waste.
 | `--json`, `-o FILE` | Machine-readable report |
 
 Exit codes: `0` clean · `1` error · `2` completed but some archives were
-skipped/offline/incomplete (details in the report).
+skipped/offline/incomplete (details in the report). The JSON shapes and
+exit codes are frozen by golden fixtures — see `docs/CONTRACT.md`.
 
 ### `search` — full-text search, one archive or all
 

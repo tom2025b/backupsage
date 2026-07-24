@@ -1,0 +1,26 @@
+[
+  {
+    "archive_id": 1,
+    "completed": true,
+    "db_path": "<TMP>/alpha.tar.db",
+    "files": 4,
+    "indexed_unix": "<TS>",
+    "label": "alpha.tar",
+    "schema_version": 3,
+    "source": "<TMP>/alpha.tar",
+    "source_type": "tar",
+    "status": "ok"
+  },
+  {
+    "archive_id": 2,
+    "completed": true,
+    "db_path": "<TMP>/beta.tar.db",
+    "files": 4,
+    "indexed_unix": "<TS>",
+    "label": "beta.tar",
+    "schema_version": 3,
+    "source": "<TMP>/beta.tar",
+    "source_type": "tar",
+    "status": "ok"
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "archive_id": 1,
+    "label": "alpha.tar",
+    "source": "<TMP>/alpha.tar",
+    "status": "ok"
+  },
+  {
+    "archive_id": 2,
+    "label": "beta.tar",
+    "source": "<TMP>/beta.tar",
+    "status": "ok"
+  }
+]

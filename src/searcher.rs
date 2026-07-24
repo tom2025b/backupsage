@@ -155,7 +155,7 @@ fn run_match(
             {raw_col}
          FROM files_fts
          WHERE files_fts MATCH ?1
-         ORDER BY rank
+         ORDER BY rank, rowid
          LIMIT ?2"
     );
     let raw_idx = if snippets { 3 } else { 2 };

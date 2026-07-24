@@ -1,0 +1,17 @@
+{
+  "hits": [
+    {
+      "matches": 1,
+      "path": "archive/report-final.txt",
+      "snippet": "shared payload [magicterm] bytes for exact dedup coverage\n"
+    },
+    {
+      "matches": 1,
+      "path": "exports/caf�-menu.txt",
+      "path_bytes": "6578706f7274732f636166e92d6d656e752e747874",
+      "snippet": "shared payload [magicterm] bytes for exact dedup coverage\n"
+    }
+  ],
+  "query": "magicterm",
+  "truncated": false
+}
