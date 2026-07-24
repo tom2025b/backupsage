@@ -1,6 +1,6 @@
 [package]
 name = "backupsage"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Index, search and deduplicate files across .tar/.tar.gz/.tar.zst backups and directories without extracting them"
 license = "MIT"
