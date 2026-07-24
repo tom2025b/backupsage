@@ -25,7 +25,7 @@ the shared execution contract while operating on user data.
 `v1.2 controlled actions` → `v1.3 media and scale` → `v2.0 local web` →
 `v2.1 remote sources`
 
-### v1.0.1 — Safety baseline
+### v1.0.1 — Safety baseline — **shipped 2026-07-23** ([tag `v1.0.1`](https://github.com/tom2025b/backupsage/releases/tag/v1.0.1))
 
 **Outcome:** the current read-only promise is true at every output path.
 
@@ -33,17 +33,25 @@ the shared execution contract while operating on user data.
 
 **Issues:**
 
-- [ ] Protect index destinations and preserve the last-good index
-- [ ] Make dedup report writes no-clobber and alias-aware
-- [ ] Validate master catalog identity before read-write open
-- [ ] Sanitize untrusted text and preserve lossless paths
-- [ ] Remediate current Rust advisories and publish v1.0.1
+- [x] Protect index destinations and preserve the last-good index (#3)
+- [x] Make dedup report writes no-clobber and alias-aware (#36)
+- [x] Validate master catalog identity before read-write open (#37)
+- [x] Sanitize untrusted text and preserve lossless paths (#5)
+- [x] Remediate current Rust advisories and publish v1.0.1 (#38)
 
 **Exit gate:** destructive-path regressions preserve protected fixture digests
 and identities; interrupted indexing preserves the previous completed index;
 terminal and JSON path fixtures are safe and lossless; and tests, Clippy,
 formatting, and `cargo audit` are clean or have every remaining warning
 explicitly documented. No v1.0 tag ships from the current unsafe baseline.
+
+**Gate met.** The shared output-safety boundary is `src/outpath.rs` and the
+terminal sanitizer is `src/textsafe.rs`; `tests/safety.rs` holds the
+destructive-path attack matrix. 95 tests, Clippy `-D warnings`, formatting and
+`cargo audit` all clean; the two remaining unmaintained-crate warnings are
+dispositioned in [`docs/SECURITY.md`](SECURITY.md). Rationale is recorded in
+[ADR 0001](adr/0001-output-safety-boundary.md) and
+[ADR 0002](adr/0002-master-signature-and-lossless-paths.md).
 
 ### v1.0.2 — Correctness and debt
 
