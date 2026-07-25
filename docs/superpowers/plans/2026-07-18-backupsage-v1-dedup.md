@@ -1,5 +1,7 @@
 # BackupSage v1.0 Cross-Archive Dedup — Implementation Plan
 
+> **Resolution (2026-07-24, #54):** This plan shipped as release v1.0.0 via PR #2 (branch `v1.0-dedup`, merged as 45bd5ef; task commits ae53fef…cd64c9d). Every checklist item below is resolved: checked with evidence, migrated to a live issue, or rejected with rationale.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans
 > (inline execution chosen — Tom pre-approved the build 2026-07-17; each task
 > ends with `cargo test` green and a commit). Spec:
@@ -45,11 +47,11 @@ walkdir, serde, serde_json, getrandom.
 
 **Files:** Modify `Cargo.toml`.
 **Steps:**
-- [ ] Add blake3 "1", image "0.25" (default features), kamadak-exif "0.6"
+- [x] Add blake3 "1", image "0.25" (default features), kamadak-exif "0.6"
       (`exif` package name: `kamadak-exif = "0.6"` — crate imports as
       `exif`), walkdir "2", serde {"1", features=["derive"]},
-      serde_json "1", getrandom "0.3". Version → 1.0.0.
-- [ ] `cargo build` compiles; `cargo test` still 16 green. Commit.
+      serde_json "1", getrandom "0.3". Version → 1.0.0. — evidence: PR #2 / commit ae53fef
+- [x] `cargo build` compiles; `cargo test` still 16 green. Commit. — evidence: PR #2 / commit ae53fef
 
 ### Task 2: `src/phash.rs` — frozen sage-dct-v1
 
@@ -68,7 +70,7 @@ top-left 8×8 (row-major, DC included) → median of the 64 coefficients
 distance ≤ 6; gradient vs checkerboard → distance ≥ 20; solid color →
 is_trivial; two frozen golden vectors (generate once from deterministic
 synthetic images, then hardcode the u64 literals — they must never change).
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit 8a9dd40 (golden vectors finalized in 435456e)
 
 ### Task 3: `src/exif_date.rs` — EXIF timestamps + media kinds
 
@@ -86,7 +88,7 @@ to unix (UTC, no tz guessing — document).
 DateTimeOriginal (build bytes in the test); precedence when multiple fields
 present; garbage buffer → None; media_kind extension table incl. case
 insensitivity and `.cr3`.
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit 8b8de71
 
 ### Task 4: `src/store.rs` — schema v3 writer/reader
 
@@ -114,7 +116,7 @@ word_stats }`. v2 helpers stay in `searcher.rs`.
 **Tests:** create → sniff v3; insert text entry → files_fts rowid == files.id
 and FTS MATCH finds it; hardlink chain (A←B←C) resolves hashes in
 finalize; duplicate path → older row gets SHADOWED; meta keys complete.
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit e7cb66e
 
 ### Task 5: `src/indexer.rs` rewrite + `src/source_dir.rs`
 
@@ -148,8 +150,8 @@ kind=image, dims, phash non-NULL; empty → kind=empty; hardlink + symlink;
 duplicate path shadowing e2e; archive_blake3 equals `blake3::hash(bytes)`
 for all three formats; dir source e2e incl. sibling naming; v0.2 16 tests
 still green (update only text spec-changed: summary print lines).
-- [ ] Failing tests → implement → green → commit (may be 2-3 commits: tar
-      path, dir path, fingerprint drain).
+- [x] Failing tests → implement → green → commit (may be 2-3 commits: tar
+      path, dir path, fingerprint drain). — evidence: PR #2 / commit 70c6c85
 
 ### Task 6: `src/master.rs` — catalog
 
@@ -177,7 +179,7 @@ survive; touch the tar → verify flags stale-index; --deep catches content
 change with same size/mtime (construct explicitly); v2 db add →
 v2-limited, zero rows; move .db + re-add → paths updated, no dup row;
 completed=0 → incomplete.
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit f6ecd72
 
 ### Task 7: `src/dedup.rs` + `src/report.rs`
 
@@ -219,7 +221,7 @@ original + slightly-brightened PNG; empty files excluded until
 --include-empty; hardlink excluded from reclaimable; shadowed member never
 KEEP; keep policies (newest exact; resolution near) with deterministic
 tie-breaks; JSON serializes with stable field names (snapshot assert).
-- [ ] Failing tests → implement → green → commit (unit MIH first, then e2e).
+- [x] Failing tests → implement → green → commit (unit MIH first, then e2e). — evidence: PR #2 / commit 0dd8c20
 
 ### Task 8: `src/searcher.rs` — federation + v2 compat
 
@@ -235,7 +237,7 @@ pub fn search_all(master: &Master, query, limit_per_archive, snippets)
 Existing single-db API unchanged (v2 dbs already work — same files_fts).
 **Tests:** two v3 archives + one v2 → hits grouped, v2 included; one db
 deleted → listed in skipped, others still searched.
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit dcd1ae7
 
 ### Task 9: `src/cli.rs` + `src/main.rs` — surface + rendering
 
@@ -252,27 +254,27 @@ when summary has skips. Env BACKUPSAGE_MASTER + --master resolution.
 index two generated archives → master add → dedup --json → parse JSON,
 assert groups + exit code; search --all; index dir; inspect one file;
 exit code 2 with an offline archive.
-- [ ] Failing tests → implement → green → commit.
+- [x] Failing tests → implement → green → commit. — evidence: PR #2 / commit dcd1ae7
 
 ### Task 10: Docs + polish + release hygiene
 
-- [ ] README rewrite: new pitch (index + search + dedup across backups),
+- [x] README rewrite: new pitch (index + search + dedup across backups),
       command reference with examples, honest-numbers section updated
       (hashing cost, master size, HEIC/RAW limits), migration note
-      (re-index = upgrade; v2-limited), keep CI badge.
-- [ ] `cargo clippy --all-targets` clean (fix or allow with reason);
+      (re-index = upgrade; v2-limited), keep CI badge. — evidence: PR #2 / commit cd64c9d
+- [x] `cargo clippy --all-targets` clean (fix or allow with reason);
       `cargo fmt`; full `cargo test` green; quick perf smoke: index a
-      generated ~100 MB archive, assert wall time sane (manual check, not CI).
-- [ ] Commit; CHANGELOG section in README or CHANGELOG.md (v1.0.0).
+      generated ~100 MB archive, assert wall time sane (manual check, not CI). — evidence: PR #2 / commit 3c697c1
+- [x] Commit; CHANGELOG section in README or CHANGELOG.md (v1.0.0). — rejected: the release commit shipped (cd64c9d) but no CHANGELOG section was ever written; the v1.0.0 record is PR #2's body and the repo since records releases as GitHub release notes (v1.0.1+).
 
 ### Task 11: Ship
 
-- [ ] Verify per superpowers:verification-before-completion (run the real
-      binary end-to-end on freshly generated archives; paste real output).
-- [ ] Push branch `v1.0-dedup` to origin (gh unauthenticated → GitHub MCP
+- [x] Verify per superpowers:verification-before-completion (run the real
+      binary end-to-end on freshly generated archives; paste real output). — evidence: PR #2 (test plan: 75 tests green incl. real-binary integration suite `tests/cli.rs` via CARGO_BIN_EXE, commit dcd1ae7)
+- [x] Push branch `v1.0-dedup` to origin (gh unauthenticated → GitHub MCP
       push_files fallback, or ask Tom to `! gh auth login`); open PR to main
       with summary; task summary to
-      `~/projects/_claude-outputs/2026-07-18_backupsage-v1.0-dedup_summary.md`.
+      `~/projects/_claude-outputs/2026-07-18_backupsage-v1.0-dedup_summary.md`. — evidence: PR #2 (branch `v1.0-dedup` on origin, merged 45bd5ef); the named `_claude-outputs` summary file was never written — rejected: the release is documented in depth by PR #2's body and the 2026-07-18 teacher-guide summary.
 
 ## Self-Review (done)
 
