@@ -1,0 +1,42 @@
+name: Release check
+
+# The executable release checklist (#56): runs scripts/release-check.sh —
+# which IS the checklist — from a clean checkout on every release tag and
+# on demand.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Lets the metadata step read release notes once the release exists;
+  # read-only token, the step skips cleanly when the release is absent.
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Default checkout skips tags; without them a workflow_dispatch on
+          # a tagged commit would silently skip the tag-agreement check.
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Run the executable release checklist
+        # On tag pushes, enforce agreement with the pushed tag explicitly.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            scripts/release-check.sh --tag "$GITHUB_REF_NAME"
+          else
+            scripts/release-check.sh
+          fi
