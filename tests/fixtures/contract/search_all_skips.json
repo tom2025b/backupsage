@@ -1,0 +1,21 @@
+{
+  "archives": [
+    {
+      "archive": "alpha.tar",
+      "hits": [
+        {
+          "matches": 1,
+          "path": "docs/report.txt",
+          "snippet": "shared payload [magicterm] bytes for exact dedup coverage\n"
+        }
+      ],
+      "truncated": false
+    }
+  ],
+  "skipped": [
+    {
+      "archive": "beta.tar",
+      "reason": "unreachable: index not found at '<TMP>/beta.tar.db' — run `backupsage index <archive>` first"
+    }
+  ]
+}

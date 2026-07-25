@@ -1,0 +1,223 @@
+{
+  "archives": [
+    {
+      "archive_id": 1,
+      "label": "alpha.tar",
+      "source": "<TMP>/alpha.tar",
+      "source_type": "tar",
+      "status": "ok"
+    },
+    {
+      "archive_id": 2,
+      "label": "beta.tar",
+      "source": "<TMP>/beta.tar",
+      "source_type": "tar",
+      "status": "db-missing"
+    }
+  ],
+  "groups": [
+    {
+      "group_id": 1,
+      "match_kind": "near",
+      "max_distance": 2,
+      "members": [
+        {
+          "archive_id": 1,
+          "archive_label": "alpha.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1600000000,
+          "content_hash": "b3:b1e2ee6969904d22bbc6594fadafedae3b99a308fefc02aa2c79310664b10ef5",
+          "exif_unix": null,
+          "file_id": 2,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": 240,
+          "keep": true,
+          "keep_reason": "highest-resolution",
+          "kind": "image",
+          "mtime_unix": 1600000000,
+          "path": "photos/holiday.png",
+          "phash": "b3e6b3e44a1e4316",
+          "shadowed": false,
+          "size": 98139,
+          "sparse": false,
+          "width": 320
+        },
+        {
+          "archive_id": 2,
+          "archive_label": "beta.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1700000000,
+          "content_hash": "b3:01c28ffe567fd5a0d060d9fca41c1a84502643dc8413576e067ec0e0fa182e43",
+          "exif_unix": null,
+          "file_id": 2,
+          "hamming_to_keep": 2,
+          "hardlink_of": null,
+          "height": 240,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "image",
+          "mtime_unix": 1700000000,
+          "path": "export/holiday-bright.png",
+          "phash": "b3e6b3e44a0e4356",
+          "shadowed": false,
+          "size": 87198,
+          "sparse": false,
+          "width": 320
+        }
+      ],
+      "reclaimable_bytes": 87198
+    },
+    {
+      "group_id": 2,
+      "match_kind": "exact",
+      "max_distance": 0,
+      "members": [
+        {
+          "archive_id": 2,
+          "archive_label": "beta.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1700000000,
+          "content_hash": "b3:9e8e9840b586f3bdc42a0148dab60deae3237b2cdfb8929b7ffe17cbd78a6c5c",
+          "exif_unix": null,
+          "file_id": 4,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": null,
+          "keep": true,
+          "keep_reason": "newest",
+          "kind": "text",
+          "mtime_unix": 1700000000,
+          "path": "exports/caf�-menu.txt",
+          "path_bytes": "6578706f7274732f636166e92d6d656e752e747874",
+          "phash": null,
+          "shadowed": false,
+          "size": 56,
+          "sparse": false,
+          "width": null
+        },
+        {
+          "archive_id": 1,
+          "archive_label": "alpha.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1600000000,
+          "content_hash": "b3:9e8e9840b586f3bdc42a0148dab60deae3237b2cdfb8929b7ffe17cbd78a6c5c",
+          "exif_unix": null,
+          "file_id": 1,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": null,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "text",
+          "mtime_unix": 1600000000,
+          "path": "docs/report.txt",
+          "phash": null,
+          "shadowed": false,
+          "size": 56,
+          "sparse": false,
+          "width": null
+        },
+        {
+          "archive_id": 2,
+          "archive_label": "beta.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1700000000,
+          "content_hash": "b3:9e8e9840b586f3bdc42a0148dab60deae3237b2cdfb8929b7ffe17cbd78a6c5c",
+          "exif_unix": null,
+          "file_id": 1,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": null,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "text",
+          "mtime_unix": 1700000000,
+          "path": "archive/report-final.txt",
+          "phash": null,
+          "shadowed": false,
+          "size": 56,
+          "sparse": false,
+          "width": null
+        }
+      ],
+      "reclaimable_bytes": 112
+    },
+    {
+      "group_id": 3,
+      "match_kind": "exact",
+      "max_distance": 0,
+      "members": [
+        {
+          "archive_id": 1,
+          "archive_label": "alpha.tar",
+          "best_ts_source": "exif:DateTimeOriginal",
+          "best_ts_unix": 1559390400,
+          "content_hash": "b3:f5f1015477d2850926f3472c4bf0f53c18876d1bf0ff4801c8ec2d4d19abd3c1",
+          "exif_unix": 1559390400,
+          "file_id": 3,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": null,
+          "keep": true,
+          "keep_reason": "clean-path",
+          "kind": "image",
+          "mtime_unix": 1600000000,
+          "path": "photos/scan.tif",
+          "phash": null,
+          "shadowed": false,
+          "size": 64,
+          "sparse": false,
+          "width": null
+        },
+        {
+          "archive_id": 2,
+          "archive_label": "beta.tar",
+          "best_ts_source": "exif:DateTimeOriginal",
+          "best_ts_unix": 1559390400,
+          "content_hash": "b3:f5f1015477d2850926f3472c4bf0f53c18876d1bf0ff4801c8ec2d4d19abd3c1",
+          "exif_unix": 1559390400,
+          "file_id": 3,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": null,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "image",
+          "mtime_unix": 1700000000,
+          "path": "old/scan-copy.tif",
+          "phash": null,
+          "shadowed": false,
+          "size": 64,
+          "sparse": false,
+          "width": null
+        }
+      ],
+      "reclaimable_bytes": 64
+    }
+  ],
+  "params": {
+    "across_only": false,
+    "exact": true,
+    "images_grouped_perceptually": true,
+    "include_empty": false,
+    "keep_policy": "exact:newest-then-clean-path; near:resolution-then-size-then-newest",
+    "min_size": 1,
+    "near": true,
+    "threshold": 3
+  },
+  "summary": {
+    "archives_incomplete": [],
+    "archives_offline": [
+      "beta.tar"
+    ],
+    "duplicate_files": 4,
+    "groups": 3,
+    "images_without_phash": 2,
+    "intra_archive_shadowed_bytes": 0,
+    "near_buckets_skipped": 0,
+    "reclaimable_bytes": 87374,
+    "skipped_archives": []
+  },
+  "version": 1
+}
