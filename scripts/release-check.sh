@@ -56,6 +56,9 @@ cargo test --locked || fail "test suite red — fix before releasing"
 step "golden-fixture contract suite, named gate"
 cargo test --locked --test contract || fail "public JSON / exit-code contract drifted — see tests/contract.rs and docs/CONTRACT.md"
 
+step "compatibility policy present"
+test -s docs/COMPATIBILITY.md || fail "missing public-contract compatibility policy — see docs/COMPATIBILITY.md"
+
 step "cargo clippy --all-targets --locked -- -D warnings"
 cargo clippy --all-targets --locked -- -D warnings || fail "clippy warnings present"
 

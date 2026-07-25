@@ -48,6 +48,9 @@ manual dispatch (`.github/workflows/release-check.yml`).
 
 - Exit codes and JSON shapes are frozen by golden fixtures
   (`docs/CONTRACT.md`); the checklist fails on any contract drift.
+- The executable checklist also requires the public
+  [compatibility policy](COMPATIBILITY.md), which defines the v1.x window and
+  breaking-change procedure for those contracts and on-disk formats.
 - The checklist is read-only against user data and archives — it writes
   only build artifacts and test temp directories.
 - Every failing step names itself and says what to fix; a release with

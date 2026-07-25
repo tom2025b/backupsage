@@ -137,7 +137,9 @@ in one tar is reported as intra-archive waste.
 
 Exit codes: `0` clean · `1` error · `2` completed but some archives were
 skipped/offline/incomplete (details in the report). The JSON shapes and
-exit codes are frozen by golden fixtures — see `docs/CONTRACT.md`.
+exit codes are frozen by golden fixtures — see `docs/CONTRACT.md`. The
+[compatibility policy](docs/COMPATIBILITY.md) defines their v1.x support
+window and the process for any future breaking change.
 
 ### `search` — full-text search, one archive or all
 
