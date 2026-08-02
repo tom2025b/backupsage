@@ -74,6 +74,11 @@ pub struct Member {
     pub keep: bool,
     /// Why this member was chosen (only on the kept member).
     pub keep_reason: Option<String>,
+    /// Keeper-star safety (issue #9): true only when this member's distance
+    /// to the keeper was directly measured and is within the run's threshold
+    /// (exact members: identity). Transitive-only members are false and must
+    /// never be auto-selected by future action planning.
+    pub actionable: bool,
     pub shadowed: bool,
     pub sparse: bool,
     /// Set on hardlink members: the path their content lives under.

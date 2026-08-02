@@ -106,6 +106,10 @@ fn near_duplicate_images_group_perceptually() {
     let dup = g.members.iter().find(|m| !m.keep).unwrap();
     assert!(dup.hamming_to_keep.unwrap() <= 3);
     assert!(dup.width.is_some() && dup.height.is_some());
+    // Keeper-star (issue #9): the dup pair is directly measured within
+    // threshold → actionable; the keeper itself never is.
+    assert!(dup.actionable);
+    assert!(!keep.actionable);
 
     // With --exact-only the two different-byte images do not group at all.
     let exact_only = DedupParams {
@@ -304,10 +308,16 @@ fn json_contract_field_names_are_stable() {
         "match_kind",
         "max_distance",
         "reclaimable_bytes",
+        "review_only_bytes",
         "members",
     ] {
         assert!(group.get(key).is_some(), "missing group key {key}");
     }
+    // Keeper-star derivation rule is echoed into params (issue #9).
+    assert!(
+        v["params"].get("actionable_rule").is_some(),
+        "missing params key actionable_rule"
+    );
     let member = &group["members"][0];
     for key in [
         "archive_id",
@@ -327,6 +337,7 @@ fn json_contract_field_names_are_stable() {
         "hamming_to_keep",
         "keep",
         "keep_reason",
+        "actionable",
         "shadowed",
         "sparse",
         "hardlink_of",
@@ -342,6 +353,8 @@ fn json_contract_field_names_are_stable() {
         "groups",
         "duplicate_files",
         "reclaimable_bytes",
+        "transitive_only_files",
+        "review_only_bytes",
         "archives_offline",
         "archives_incomplete",
         "skipped_archives",
