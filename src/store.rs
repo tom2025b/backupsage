@@ -129,12 +129,14 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
     )?;
 
     // search-only (#39): external-content FTS5 over a view that exposes
-    // path from `files` and an always-empty content column — content
-    // tokens are indexed at INSERT time and never stored (no content
-    // shadow table exists), so no plaintext is recoverable from the index
-    // file, while path retrieval keeps working. snippet()/highlight()
-    // read the empty view column; read paths gate on `content_mode`
-    // instead of relying on that.
+    // path from `files` and an always-empty content column — the VERBATIM
+    // text is never stored (no content shadow table exists) while path
+    // retrieval keeps working. The FTS index itself still holds tokens
+    // and their positions, which can approximate the original text: this
+    // reduces stored content, it is not encryption or a privacy boundary
+    // (documented in README and ContentMode). snippet()/highlight() read
+    // the empty view column; read paths gate on `content_mode` instead of
+    // relying on that.
     if meta.mode == crate::indexer::ContentMode::SearchOnly {
         conn.execute_batch(
             "CREATE VIRTUAL TABLE files_fts USING fts5(

@@ -510,9 +510,10 @@ fn print_index_summary(s: &IndexSummary) {
         );
     }
     match s.mode.as_str() {
-        "search-only" => {
-            println!("Mode     : search-only (contentless FTS — no stored plaintext)")
-        }
+        "search-only" => println!(
+            "Mode     : search-only (verbatim text not stored; tokens and \
+             positions remain searchable — not a privacy boundary)"
+        ),
         "metadata-only" => println!("Mode     : metadata-only (content not read)"),
         _ => {}
     }

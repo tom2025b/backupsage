@@ -53,10 +53,11 @@ pub enum ContentMode {
     /// Everything: plaintext FTS, word stats, hashes, media metadata.
     #[default]
     Full,
-    /// Contentless FTS (tokens indexed, text not stored — snippets and
-    /// match counts are structurally unavailable), hashes and media
-    /// metadata kept, word stats dropped. Tokens and their frequencies
-    /// still leak; this is not encryption or a privacy boundary.
+    /// Contentless FTS: the verbatim text is not stored (snippets and
+    /// match counts become unavailable), hashes and media metadata kept,
+    /// word stats dropped. The FTS index still holds tokens and their
+    /// positions, which can approximate the text — this reduces stored
+    /// content; it is not encryption or a privacy boundary.
     SearchOnly,
     /// Content is never read: names, sizes, times, entry types only.
     /// No hashes, no FTS content, no media metadata. Content search is
