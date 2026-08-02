@@ -189,31 +189,21 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             .map(|(i, _)| i)
             .collect();
 
-        let pairs = mih_pairs(
-            &image_idxs
-                .iter()
-                .map(|&i| rows[i].phash.unwrap() as u64)
-                .collect::<Vec<_>>(),
+        let local_hashes: Vec<u64> = image_idxs
+            .iter()
+            .map(|&i| rows[i].phash.unwrap() as u64)
+            .collect();
+        for members in near_components(
+            &local_hashes,
             p.threshold,
             p.bucket_cap,
             &mut near_buckets_skipped,
-        );
-
-        let mut uf = UnionFind::new(image_idxs.len());
-        for &(a, b) in &pairs {
-            uf.union(a, b);
-        }
-        let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (local, &global) in image_idxs.iter().enumerate() {
-            clusters.entry(uf.find(local)).or_default().push(global);
-        }
-        for (_, members) in clusters {
-            if members.len() > 1 {
-                for &m in &members {
-                    in_near_group[m] = true;
-                }
-                groups_raw.push(("near".into(), members, 0)); // max_dist filled later
+        ) {
+            let globals: Vec<usize> = members.iter().map(|&l| image_idxs[l]).collect();
+            for &m in &globals {
+                in_near_group[m] = true;
             }
+            groups_raw.push(("near".into(), globals, 0)); // max_dist filled later
         }
     }
 
@@ -555,6 +545,33 @@ fn fetch_scope(master: &Master, p: &DedupParams, scope_ids: &[i64]) -> Result<Ve
 }
 
 // ── Multi-index hashing ──────────────────────────────────────────────────────
+
+/// Connected components (size ≥ 2) of the verified within-threshold pair
+/// graph — the *review groups*. Component membership only proves a chain of
+/// pairwise matches; it never implies every member is within threshold of
+/// every other. Keeper-star classification happens later, per member.
+fn near_components(
+    hashes: &[u64],
+    threshold: u32,
+    cap: usize,
+    skipped: &mut u64,
+) -> Vec<Vec<usize>> {
+    let pairs = mih_pairs(hashes, threshold, cap, skipped);
+    let mut uf = UnionFind::new(hashes.len());
+    for &(a, b) in &pairs {
+        uf.union(a, b);
+    }
+    let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..hashes.len() {
+        clusters.entry(uf.find(i)).or_default().push(i);
+    }
+    let mut components: Vec<Vec<usize>> = clusters.into_values().filter(|c| c.len() > 1).collect();
+    for c in &mut components {
+        c.sort_unstable();
+    }
+    components.sort();
+    components
+}
 
 /// All pairs (by local index) within `threshold` hamming distance.
 /// Bucket iteration per 16-bit band; buckets over `cap` are skipped and
