@@ -447,6 +447,7 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
             (backupsage::store::flags::SPARSE, "sparse"),
             (backupsage::store::flags::SHADOWED, "shadowed"),
             (backupsage::store::flags::DECODE_FAILED, "decode-failed"),
+            (backupsage::store::flags::PAX_UNPARSED, "pax-unparsed"),
         ] {
             if fl & bit != 0 {
                 markers.push(name);

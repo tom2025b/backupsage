@@ -182,6 +182,10 @@ fn unparsable_pax_segments_warn_but_keep_content() {
         "unreadable pax metadata must not cost the file its hash"
     );
     assert_eq!(flg & flags::SPARSE, 0);
+    assert!(
+        flg & flags::PAX_UNPARSED != 0,
+        "row-level audit flag for unreadable pax metadata"
+    );
     assert_eq!(fts_hits(&conn, "searchword"), 1, "content stays searchable");
     assert_eq!(
         summary.entries_pax_unparsed, 1,
@@ -215,6 +219,7 @@ fn sparse_record_beside_garbage_segments_still_detected() {
     assert!(hash.is_none(), "detectable sparse map must still win");
     assert_eq!(size, 40960);
     assert!(flg & flags::SPARSE != 0);
+    assert!(flg & flags::PAX_UNPARSED != 0);
     assert_eq!(summary.files_sparse_unsupported, 1);
     assert_eq!(summary.entries_pax_unparsed, 1);
 
