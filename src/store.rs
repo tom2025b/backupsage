@@ -118,13 +118,30 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
          PRAGMA cache_size=-65536;",
     )?;
 
+    // search-only (#39): contentless FTS5 — tokens are indexed at INSERT
+    // and the column values discarded, so no plaintext is recoverable from
+    // the index file. snippet()/highlight() become structurally
+    // unavailable; read paths gate on `content_mode` before using them.
+    if meta.mode == crate::indexer::ContentMode::SearchOnly {
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE files_fts USING fts5(
+                path,
+                content,
+                tokenize = 'unicode61',
+                content = ''
+            );",
+        )?;
+    } else {
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE files_fts USING fts5(
+                path,
+                content,
+                tokenize = 'unicode61'
+            );",
+        )?;
+    }
     conn.execute_batch(
-        "CREATE VIRTUAL TABLE files_fts USING fts5(
-            path,
-            content,
-            tokenize = 'unicode61'
-        );
-        CREATE TABLE word_freq (
+        "CREATE TABLE word_freq (
             word        TEXT PRIMARY KEY,
             total_count INTEGER NOT NULL DEFAULT 0,
             doc_count   INTEGER NOT NULL DEFAULT 0
