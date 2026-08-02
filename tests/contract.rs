@@ -285,6 +285,7 @@ fn json_surfaces_match_golden_fixtures() {
             names,
             [
                 "dedup.json",
+                "dedup_chain.json",
                 "dedup_skips.json",
                 "master_list.json",
                 "master_verify.json",
@@ -295,6 +296,62 @@ fn json_surfaces_match_golden_fixtures() {
             "unexpected fixture set — remove orphans or update this list"
         );
     }
+}
+
+/// Issue #9: freeze the keeper-star fields with NON-degenerate values — a
+/// real transitive-only chain member (`actionable: false`,
+/// `hamming_to_keep > 3`) pinned in a dedicated fixture, per ADR 0003's
+/// residual-gaps note that a field frozen only at degenerate values does not
+/// pin its real shape.
+#[test]
+fn dedup_chain_json_matches_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let (a_png, b_png, c_png) = near_chain_pngs();
+    let chain_a = write_archive(
+        tmp,
+        "chain-alpha.tar",
+        &build_tar_mtime(
+            &[("photos/orig.png", a_png), ("photos/bright.png", b_png)],
+            1_600_000_000,
+        ),
+    );
+    let chain_b = write_archive(
+        tmp,
+        "chain-beta.tar",
+        &build_tar_mtime(&[("export/faded.png", c_png)], 1_700_000_000),
+    );
+    let master = tmp.join("chain-master.db");
+    let m = master.to_str().unwrap();
+    for a in [&chain_a, &chain_b] {
+        let out = run(&["index", a.to_str().unwrap()]);
+        assert_eq!(code(&out), 0, "index failed: {}", stdout(&out));
+    }
+    let out = run(&[
+        "--master",
+        m,
+        "master",
+        "add",
+        chain_a.with_extension("tar.db").to_str().unwrap(),
+        chain_b.with_extension("tar.db").to_str().unwrap(),
+    ]);
+    assert_eq!(code(&out), 0, "master add failed");
+
+    let out = run(&["--master", m, "dedup", "--json"]);
+    assert_eq!(code(&out), 0);
+    let report = normalized(&stdout(&out), tmp);
+    // Non-degenerate guarantee before freezing: the transitive-only member
+    // really is present and review-only in what gets blessed.
+    assert_eq!(report["summary"]["transitive_only_files"], 1, "{report}");
+    let faded = report["groups"][0]["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|mm| mm["path"] == "export/faded.png")
+        .unwrap();
+    assert_eq!(faded["actionable"], false);
+    assert!(faded["hamming_to_keep"].as_u64().unwrap() > 3);
+    assert_matches_fixture("dedup_chain.json", report);
 }
 
 /// The documented exit-code contract, executed per subcommand:
