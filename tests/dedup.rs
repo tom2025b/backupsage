@@ -120,6 +120,60 @@ fn near_duplicate_images_group_perceptually() {
     assert_eq!(r2.summary.groups, 0);
 }
 
+/// Issue #9 end-to-end: a transitive-only chain member is reported,
+/// reviewable, and excluded from every actionable count.
+#[test]
+fn transitive_chain_member_is_review_only_not_actionable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a_png, b_png, c_png) = near_chain_pngs();
+    // Two archives so the group is cross-archive like real corpora.
+    let db_a = index_archive(
+        dir.path(),
+        "alpha.tar",
+        &[("photos/orig.png", a_png), ("photos/bright.png", b_png)],
+    );
+    let db_b = index_archive(dir.path(), "beta.tar", &[("export/faded.png", c_png)]);
+    let m = master_of(dir.path(), &[&db_a, &db_b]);
+    let report = run_dedup(&m, &DedupParams::default()).unwrap();
+
+    assert_eq!(
+        report.summary.groups,
+        1,
+        "chain must form ONE review group: {}",
+        report.to_json()
+    );
+    let g = &report.groups[0];
+    assert_eq!(g.match_kind, "near");
+    assert_eq!(g.members.len(), 3, "{}", report.to_json());
+    let by_path: std::collections::HashMap<&str, &backupsage::report::Member> =
+        g.members.iter().map(|m| (m.path.as_str(), m)).collect();
+    let keeper = by_path["photos/orig.png"];
+    let direct = by_path["photos/bright.png"];
+    let transitive = by_path["export/faded.png"];
+
+    assert!(keeper.keep, "highest-resolution copy must be keeper");
+    assert!(!keeper.actionable, "keepers are never actionable");
+    assert!(!direct.keep);
+    assert!(direct.actionable, "directly measured member is actionable");
+    assert!(direct.hamming_to_keep.unwrap() <= 3);
+    assert!(!transitive.keep);
+    assert!(
+        !transitive.actionable,
+        "transitive-only member must never be actionable: {}",
+        report.to_json()
+    );
+    assert!(transitive.hamming_to_keep.unwrap() > 3);
+
+    // Honest accounting: the transitive member's bytes are review-only, and
+    // max_distance (keeper-relative) exposes the chain rather than hiding it.
+    assert_eq!(g.review_only_bytes, transitive.size);
+    assert_eq!(g.reclaimable_bytes, direct.size);
+    assert!(g.max_distance > 3);
+    assert_eq!(report.summary.transitive_only_files, 1);
+    assert_eq!(report.summary.review_only_bytes, transitive.size);
+    assert_eq!(report.summary.duplicate_files, 1);
+}
+
 #[test]
 fn identical_images_stay_one_group_when_near_enabled() {
     // Distance-0 images must appear once (in the near group), never doubled
