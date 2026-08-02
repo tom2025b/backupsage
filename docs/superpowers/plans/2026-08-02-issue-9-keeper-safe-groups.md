@@ -633,4 +633,4 @@ git push -u origin issue-9-keeper-safe-groups
 - **Placeholder scan:** Task 6 Step 2 has one deliberate bracketed section (corpus wiring) pointing at a concrete existing test to mirror — acceptable because the exact tar-building helper signatures live in that file and must be copied from it, not invented here. Task 7 names exact insertion points but defers to the file's real accumulation style with line ranges given.
 - **Type consistency:** `member_is_actionable` signature identical in Tasks 1/3/4; `near_components` identical in Tasks 2/3; JSON field names identical across Tasks 4/6/7/8.
 
-**Signed:** thomas2025 · 2026-08-02T00:00:00-04:00 (timestamp set at write time by session; see git log for precise time)
+**Signed:** thomas2025 · 2026-08-02T01:16:47-04:00

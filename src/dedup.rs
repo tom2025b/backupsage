@@ -785,6 +785,29 @@ mod tests {
     }
 
     #[test]
+    fn actionable_is_keeper_star_only() {
+        use super::member_is_actionable as act;
+        // near: directly measured within threshold → actionable
+        assert!(act("near", false, false, false, Some(0), 3));
+        assert!(act("near", false, false, false, Some(3), 3));
+        // near: transitive-only (beyond threshold) → review-only
+        assert!(!act("near", false, false, false, Some(4), 3));
+        // threshold is the run's threshold, not MAX: distance 2 at threshold 1 is NOT safe
+        assert!(!act("near", false, false, false, Some(2), 1));
+        // missing distance can never be actionable
+        assert!(!act("near", false, false, false, None, 3));
+        // exact groups are byte-identical — always actionable when eligible
+        assert!(act("exact", false, false, false, Some(0), 3));
+        assert!(act("exact", false, false, false, None, 0));
+        // keeper, shadowed and hardlink members are never actionable
+        assert!(!act("near", true, false, false, Some(0), 3));
+        assert!(!act("exact", false, true, false, Some(0), 3));
+        assert!(!act("exact", false, false, true, Some(0), 3));
+        // unknown kind fails closed
+        assert!(!act("weird", false, false, false, Some(0), 3));
+    }
+
+    #[test]
     fn union_find_components() {
         let mut uf = UnionFind::new(5);
         uf.union(0, 1);
