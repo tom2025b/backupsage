@@ -635,6 +635,7 @@ fn index_tar(
     let mut summary = IndexSummary {
         db_path: db_path.clone(),
         format: fmt.to_string(),
+        mode: opts.mode.as_str().to_string(),
         ..IndexSummary::default()
     };
     let mut run = IndexRun::new(&conn, opts, &mut summary)?;

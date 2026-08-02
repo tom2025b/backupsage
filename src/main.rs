@@ -509,6 +509,13 @@ fn print_index_summary(s: &IndexSummary) {
             s.files_truncated
         );
     }
+    match s.mode.as_str() {
+        "search-only" => {
+            println!("Mode     : search-only (contentless FTS — no stored plaintext)")
+        }
+        "metadata-only" => println!("Mode     : metadata-only (content not read)"),
+        _ => {}
+    }
     if s.files_sparse_unsupported > 0 {
         println!(
             "warning: {} unsupported PAX sparse dialects — indexed name-only \

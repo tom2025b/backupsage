@@ -65,6 +65,7 @@ pub(crate) fn index_dir(
     let mut summary = IndexSummary {
         db_path: db_path.clone(),
         format: "directory".to_string(),
+        mode: opts.mode.as_str().to_string(),
         ..IndexSummary::default()
     };
     let mut run = IndexRun::new(&conn, opts, &mut summary)?;
