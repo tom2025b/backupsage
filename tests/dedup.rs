@@ -342,6 +342,40 @@ fn shadowed_rows_never_keep_and_report_their_bytes() {
     assert_eq!(report.summary.duplicate_files, 0);
 }
 
+/// Issue #9 rode along with a determinism fix: equal primary sort keys must
+/// tie-break on the smallest member identity, never HashMap iteration order.
+#[test]
+fn equal_reclaimable_groups_order_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let p1 = b"payload-one-equal-len!".to_vec();
+    let p2 = b"payload-two-equal-len!".to_vec();
+    assert_eq!(p1.len(), p2.len());
+    let db_a = index_archive(
+        dir.path(),
+        "t1.tar",
+        &[("a/x1.bin", p1.clone()), ("b/y1.bin", p2.clone())],
+    );
+    let db_b = index_archive(dir.path(), "t2.tar", &[("a/x2.bin", p1), ("b/y2.bin", p2)]);
+    let m = master_of(dir.path(), &[&db_a, &db_b]);
+    let r = run_dedup(&m, &DedupParams::default()).unwrap();
+
+    assert_eq!(r.summary.groups, 2);
+    assert_eq!(r.groups[0].reclaimable_bytes, r.groups[1].reclaimable_bytes);
+    let min0 = r.groups[0]
+        .members
+        .iter()
+        .map(|m| (m.archive_id, m.file_id))
+        .min()
+        .unwrap();
+    let min1 = r.groups[1]
+        .members
+        .iter()
+        .map(|m| (m.archive_id, m.file_id))
+        .min()
+        .unwrap();
+    assert!(min0 < min1, "tie must break on smallest member identity");
+}
+
 #[test]
 fn json_contract_field_names_are_stable() {
     let dir = tempfile::tempdir().unwrap();
