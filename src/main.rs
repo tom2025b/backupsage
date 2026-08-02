@@ -619,7 +619,11 @@ fn render_dedup_report(r: &DedupReport) -> String {
             "{} near-duplicate member{} beyond threshold — review manually, \
              never auto-deletable ({})",
             s.transitive_only_files,
-            if s.transitive_only_files == 1 { "" } else { "s" },
+            if s.transitive_only_files == 1 {
+                ""
+            } else {
+                "s"
+            },
             human_bytes(s.review_only_bytes),
         );
     }

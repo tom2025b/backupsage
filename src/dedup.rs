@@ -878,8 +878,7 @@ mod tests {
 
         for threshold in 0..=3u32 {
             let mut skipped = 0u64;
-            let components =
-                near_components(&hashes, threshold, DEFAULT_BUCKET_CAP, &mut skipped);
+            let components = near_components(&hashes, threshold, DEFAULT_BUCKET_CAP, &mut skipped);
             assert_eq!(skipped, 0, "oracle corpus must not hit the bucket cap");
 
             // Brute-force oracle: union every pair within threshold, then
