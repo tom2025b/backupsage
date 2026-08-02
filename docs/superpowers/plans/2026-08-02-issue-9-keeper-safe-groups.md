@@ -42,7 +42,7 @@
 **Interfaces:**
 - Produces: `fn member_is_actionable(kind: &str, is_keep: bool, shadowed: bool, hardlink: bool, hamming_to_keep: Option<u32>, threshold: u32) -> bool` — consumed by Task 4 (report assembly) and Task 3 (oracle).
 
-- [ ] **Step 1: Write the failing tests** (append inside `mod tests` in src/dedup.rs)
+- [x] **Step 1: Write the failing tests** (append inside `mod tests` in src/dedup.rs)
 
 ```rust
 #[test]
@@ -69,12 +69,12 @@ fn actionable_is_keeper_star_only() {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --lib actionable_is_keeper_star_only`
 Expected: compile FAIL — `member_is_actionable` not found.
 
-- [ ] **Step 3: Implement** (place after `pick_keep` in src/dedup.rs)
+- [x] **Step 3: Implement** (place after `pick_keep` in src/dedup.rs)
 
 ```rust
 /// The keeper-star rule (issue #9): a member is an *actionable* duplicate
@@ -104,7 +104,7 @@ fn member_is_actionable(
 }
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `cargo test --lib actionable_is_keeper_star_only`
 Expected: PASS. (No commit step — autocheckpointer owns git.)
@@ -119,7 +119,7 @@ Expected: PASS. (No commit step — autocheckpointer owns git.)
 **Interfaces:**
 - Produces: `fn near_components(hashes: &[u64], threshold: u32, cap: usize, skipped: &mut u64) -> Vec<Vec<usize>>` — sorted components (each sorted, size ≥ 2) over *local* indices. Consumed by Task 3's oracle and by `run_dedup`.
 
-- [ ] **Step 1: Implement the extraction** (replace the `mih_pairs` + union-find + clusters block inside `run_dedup`, and add the new function near `mih_pairs`)
+- [x] **Step 1: Implement the extraction** (replace the `mih_pairs` + union-find + clusters block inside `run_dedup`, and add the new function near `mih_pairs`)
 
 ```rust
 /// Connected components (size ≥ 2) of the verified within-threshold pair
@@ -166,7 +166,7 @@ In `run_dedup`, the near-group block becomes:
         }
 ```
 
-- [ ] **Step 2: Verify no behavior change**
+- [x] **Step 2: Verify no behavior change**
 
 Run: `cargo test`
 Expected: all existing tests PASS (including `mih_equals_brute_force_on_random_corpus`, untouched).
@@ -181,7 +181,7 @@ Expected: all existing tests PASS (including `mih_equals_brute_force_on_random_c
 **Interfaces:**
 - Consumes: `near_components` (Task 2), `member_is_actionable` (Task 1), `phash::hamming`, `UnionFind`.
 
-- [ ] **Step 1: Write the failing/verifying oracle test**
+- [x] **Step 1: Write the failing/verifying oracle test**
 
 ```rust
 /// Issue #9 AC1: the full grouping pipeline (MIH candidates → union-find →
@@ -268,7 +268,7 @@ fn grouping_matches_brute_force_oracle_at_every_threshold() {
 }
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `cargo test --lib grouping_matches_brute_force_oracle_at_every_threshold`
 Expected: PASS (components already match by construction; the keeper-star and anti-vacuity assertions are the new evidence). If the component comparison fails, that is a real found bug — stop and diagnose before proceeding.
@@ -289,14 +289,14 @@ Expected: PASS (components already match by construction; the keeper-star and an
   - `Summary.transitive_only_files: usize`, `Summary.review_only_bytes: u64`
   - `ReportParams.actionable_rule: String` = `"near:direct-to-keeper-within-threshold; exact:always; shadowed/hardlink:never"`
 
-- [ ] **Step 1: Extend the failing field-pin test** (tests/dedup.rs `json_contract_field_names_are_stable`): add to the member-key assertions `"actionable"`, to the group-key assertions `"review_only_bytes"`, to the summary-key assertions `"transitive_only_files"` and `"review_only_bytes"`, and to the params-key assertions `"actionable_rule"`. Also extend `near_duplicate_images_group_perceptually`: the dup member of the 2-image pair must have `"actionable": true` (its distance 2 ≤ threshold 3) and the keeper `"actionable": false`.
+- [x] **Step 1: Extend the failing field-pin test** (tests/dedup.rs `json_contract_field_names_are_stable`): add to the member-key assertions `"actionable"`, to the group-key assertions `"review_only_bytes"`, to the summary-key assertions `"transitive_only_files"` and `"review_only_bytes"`, and to the params-key assertions `"actionable_rule"`. Also extend `near_duplicate_images_group_perceptually`: the dup member of the 2-image pair must have `"actionable": true` (its distance 2 ≤ threshold 3) and the keeper `"actionable": false`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cargo test --test dedup`
 Expected: FAIL — missing keys.
 
-- [ ] **Step 3: Implement.** In `src/report.rs` add (with doc comments in the existing style):
+- [x] **Step 3: Implement.** In `src/report.rs` add (with doc comments in the existing style):
 
 ```rust
     // Member — after `keep_reason`:
@@ -363,7 +363,7 @@ with `let mut review_only = 0u64;` per group, `let mut transitive_only_files = 0
 
 `keep_policy` stays byte-identical.
 
-- [ ] **Step 4: Run the suite**
+- [x] **Step 4: Run the suite**
 
 Run: `cargo test`
 Expected: tests/dedup.rs and unit tests PASS; **tests/contract.rs FAILS** (fixtures lack the new fields) — expected and left red until Task 8's deliberate re-bless. Everything else green.
@@ -375,9 +375,9 @@ Expected: tests/dedup.rs and unit tests PASS; **tests/contract.rs FAILS** (fixtu
 **Files:**
 - Modify: `src/dedup.rs:340-352` (sort arms)
 
-- [ ] **Step 1: Write the failing test** (tests in src/dedup.rs are hash-level; this is simplest as an integration assertion — append to Task 6's chain test instead if preferred; otherwise pin at unit level that `near_components` output is sorted, which Task 2 already guarantees. The load-bearing change is the tie-break below.)
+- [x] **Step 1: Write the failing test** (tests in src/dedup.rs are hash-level; this is simplest as an integration assertion — append to Task 6's chain test instead if preferred; otherwise pin at unit level that `near_components` output is sorted, which Task 2 already guarantees. The load-bearing change is the tie-break below.)
 
-- [ ] **Step 2: Implement stable tie-breaks** — replace the three `sort_by_key` arms so equal primary keys fall back to the first member (groups are already internally sorted keeper-first, then by archive/file id):
+- [x] **Step 2: Implement stable tie-breaks** — replace the three `sort_by_key` arms so equal primary keys fall back to the first member (groups are already internally sorted keeper-first, then by archive/file id):
 
 ```rust
     let first_key = |g: &Group| {
@@ -409,7 +409,7 @@ Expected: tests/dedup.rs and unit tests PASS; **tests/contract.rs FAILS** (fixtu
     }
 ```
 
-- [ ] **Step 3: Run the suite**
+- [x] **Step 3: Run the suite**
 
 Run: `cargo test`
 Expected: same pass/fail set as after Task 4 (contract still red, all else green — fixture group order must not change, since current fixtures have distinct reclaimable_bytes).
@@ -425,7 +425,7 @@ Expected: same pass/fail set as after Task 4 (contract still red, all else green
 **Interfaces:**
 - Produces: `pub fn near_chain_pngs() -> (Vec<u8>, Vec<u8>, Vec<u8>)` — PNGs (a, b, c) where, under `phash::phash`: keeper-forcing `a` is 640×480 (highest pixel count), `d(a,b) ∈ 1..=3`, `d(b,c) ∈ 1..=3`, `d(a,c) > 3`. Found by bounded deterministic search; panics with a clear message if the space yields nothing (loud fixture failure, never silent).
 
-- [ ] **Step 1: Implement the helper** (tests/common/mod.rs; `image` and the backupsage lib are already dev-dependencies of the test crate)
+- [x] **Step 1: Implement the helper** (tests/common/mod.rs; `image` and the backupsage lib are already dev-dependencies of the test crate)
 
 ```rust
 /// Deterministic 3-image near-dup chain for keeper-safety tests (issue #9):
@@ -478,7 +478,7 @@ pub fn near_chain_pngs() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
 }
 ```
 
-- [ ] **Step 2: Write the failing end-to-end test** (tests/dedup.rs; follow the file's existing archive-building pattern — same helpers `near_duplicate_images_group_perceptually` uses to build tars, index them, and run dedup with `--json`)
+- [x] **Step 2: Write the failing end-to-end test** (tests/dedup.rs; follow the file's existing archive-building pattern — same helpers `near_duplicate_images_group_perceptually` uses to build tars, index them, and run dedup with `--json`)
 
 ```rust
 /// Issue #9 end-to-end: a transitive-only chain member is reported,
@@ -531,7 +531,7 @@ fn transitive_chain_member_is_review_only_not_actionable() {
 }
 ```
 
-- [ ] **Step 3: Run to verify failure, then wire the corpus** (the bracketed build section) using the existing tar/index/sync pattern from `near_duplicate_images_group_perceptually`; run again.
+- [x] **Step 3: Run to verify failure, then wire the corpus** (the bracketed build section) using the existing tar/index/sync pattern from `near_duplicate_images_group_perceptually`; run again.
 
 Run: `cargo test --test dedup transitive_chain_member_is_review_only_not_actionable`
 Expected: PASS once wired. If the group unexpectedly splits or the keeper is not `orig.png`, the helper's chain properties vs `pick_keep`'s resolution-first rule are out of sync — diagnose, don't loosen assertions.
@@ -544,9 +544,9 @@ Expected: PASS once wired. If the group unexpectedly splits or the keeper is not
 - Modify: `src/main.rs` (`render_dedup_report`, member row + summary footer)
 - Modify: `tests/cli.rs` (dedup text assertions, following existing patterns)
 
-- [ ] **Step 1: Failing CLI test**: extend the existing dedup text-output test in tests/cli.rs (or add one following its pattern) building the Task 6 chain corpus and asserting the text output contains `[review-only]` on the transitive member's row and a summary line matching `1 near-duplicate member beyond threshold — review manually, never auto-deletable`.
+- [x] **Step 1: Failing CLI test**: extend the existing dedup text-output test in tests/cli.rs (or add one following its pattern) building the Task 6 chain corpus and asserting the text output contains `[review-only]` on the transitive member's row and a summary line matching `1 near-duplicate member beyond threshold — review manually, never auto-deletable`.
 
-- [ ] **Step 2: Implement.** In the member-row extras (where `[dist N]`, `[shadowed]`, `[sparse]`, `[hardlink]` are emitted): after the `[dist N]` block add
+- [x] **Step 2: Implement.** In the member-row extras (where `[dist N]`, `[shadowed]`, `[sparse]`, `[hardlink]` are emitted): after the `[dist N]` block add
 
 ```rust
                 if !m.keep && !m.shadowed && m.hardlink_of.is_none() && !m.actionable {
@@ -569,7 +569,7 @@ Expected: PASS once wired. If the group unexpectedly splits or the keeper is not
 
 (use the file's existing byte-formatting helper — check its actual name at src/main.rs:576-623 and match it).
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `cargo test --test cli`
 Expected: PASS.
@@ -584,18 +584,18 @@ Expected: PASS.
 - Re-bless: `tests/fixtures/contract/dedup.json`, `dedup_skips.json`
 - Modify: `docs/CONTRACT.md`, `docs/COMPATIBILITY.md`
 
-- [ ] **Step 1: Add the chain scenario to tests/contract.rs**: a new test `dedup_chain_json_matches_fixture` that builds a dedicated mini-corpus (two archives, the three `near_chain_pngs()` images laid out as in Task 6), runs `dedup --json --threshold 3`, and `assert_matches_fixture("dedup_chain.json", …)`. Add `"dedup_chain.json"` to the hardcoded fixture-name list (7→8) in the orphan guard.
+- [x] **Step 1: Add the chain scenario to tests/contract.rs**: a new test `dedup_chain_json_matches_fixture` that builds a dedicated mini-corpus (two archives, the three `near_chain_pngs()` images laid out as in Task 6), runs `dedup --json --threshold 3`, and `assert_matches_fixture("dedup_chain.json", …)`. Add `"dedup_chain.json"` to the hardcoded fixture-name list (7→8) in the orphan guard.
 
-- [ ] **Step 2: Re-bless deliberately**
+- [x] **Step 2: Re-bless deliberately**
 
 Run: `BACKUPSAGE_BLESS=1 cargo test --test contract` then `cargo test --test contract`
 Expected: second run PASS. Then `git diff --stat` the fixtures (the checkpointer will have committed the pre-bless state, so the diff is inspectable): `dedup.json`/`dedup_skips.json` diffs must show ONLY added keys (`actionable`, `review_only_bytes`, `transitive_only_files`, `actionable_rule`) with values consistent with the 2-member pair (both existing members: `actionable` true for the dup, false for keeper; `review_only_bytes: 0`; `transitive_only_files: 0`). `dedup_chain.json` is new and must pin `actionable: false` with `hamming_to_keep > 3` on the transitive member — the non-degenerate value ADR 0003's residual-gaps note demands. Any removed/renamed key = stop, fix, re-bless.
 
-- [ ] **Step 3: Update docs.**
+- [x] **Step 3: Update docs.**
   - `docs/CONTRACT.md`: fixture count 7→8 with `dedup_chain.json` listed; note under the dedup surface: "v1.0.2 (#9) added `actionable`, `review_only_bytes`, `transitive_only_files`, `actionable_rule` — additive, still version 1."
   - `docs/COMPATIBILITY.md`: in the JSON row, record the additive v1.0.2 field additions and that `reclaimable_bytes`/`duplicate_files` now count only keeper-star-safe members (correctness fix: previously inflated by transitive-only members whose safety was never measured).
 
-- [ ] **Step 4: Full gate**
+- [x] **Step 4: Full gate**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`
 Expected: all green, all targets.
@@ -615,9 +615,9 @@ ADR content requirements: Context = union-find transitivity vs the v1.2 "near du
 
 ### Task 10: Adversarial review, final commit, PR
 
-- [ ] **Step 1:** Run the adversarial review fleet (independent reviewers: correctness/oracle-vacuity, contract-compatibility, test-quality; session-model verify pass on majors). Fix everything confirmed.
-- [ ] **Step 2:** Full gate again: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`.
-- [ ] **Step 3:** Stop the autocheckpointer (remove its marker file), then make the final commit as `claude_2010` and push:
+- [x] **Step 1:** Run the adversarial review fleet (independent reviewers: correctness/oracle-vacuity, contract-compatibility, test-quality; session-model verify pass on majors). Fix everything confirmed.
+- [x] **Step 2:** Full gate again: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check`.
+- [x] **Step 3:** Stop the autocheckpointer (remove its marker file), then make the final commit as `claude_2010` and push:
 
 ```bash
 git -c user.name=claude_2010 -c user.email=262510778+tom2025b@users.noreply.github.com \
@@ -625,7 +625,7 @@ git -c user.name=claude_2010 -c user.email=262510778+tom2025b@users.noreply.gith
 git push -u origin issue-9-keeper-safe-groups
 ```
 
-- [ ] **Step 4:** Open the PR (body: what/why, oracle evidence, fixture-diff summary, gate results), merge to main after checks, **never delete the branch**, close #9 with evidence, tick ROADMAP (in the PR itself), update worklog + journal.
+- [x] **Step 4:** Open the PR (body: what/why, oracle evidence, fixture-diff summary, gate results), merge to main after checks, **never delete the branch**, close #9 with evidence, tick ROADMAP (in the PR itself), update worklog + journal.
 
 ## Self-Review
 
