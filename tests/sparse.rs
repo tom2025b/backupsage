@@ -164,7 +164,11 @@ fn unparsable_pax_segments_warn_but_keep_content() {
     // records, followed by the member it applies to.
     let mut bytes = Vec::new();
     xheader_raw(&mut bytes, b"this is not a pax record at all");
-    plain_member_raw(&mut bytes, "data/xattred.txt", b"real content stays searchword");
+    plain_member_raw(
+        &mut bytes,
+        "data/xattred.txt",
+        b"real content stays searchword",
+    );
     plain_member_raw(&mut bytes, "after/clean.txt", b"cleansentinel word");
     bytes.extend_from_slice(&[0u8; 1024]); // end-of-archive blocks
 
@@ -179,7 +183,10 @@ fn unparsable_pax_segments_warn_but_keep_content() {
     );
     assert_eq!(flg & flags::SPARSE, 0);
     assert_eq!(fts_hits(&conn, "searchword"), 1, "content stays searchable");
-    assert_eq!(summary.entries_pax_unparsed, 1, "unreadable metadata is counted");
+    assert_eq!(
+        summary.entries_pax_unparsed, 1,
+        "unreadable metadata is counted"
+    );
     assert_eq!(summary.files_sparse_unsupported, 0);
 
     let (_, _, _, _, shash, _, _, _) = files_row(&conn, "after/clean.txt");
@@ -203,8 +210,7 @@ fn sparse_record_beside_garbage_segments_still_detected() {
 
     let (summary, conn) = index_tar_bytes(dir.path(), "mixedpax.tar", &bytes);
 
-    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
-        files_row(&conn, "data/holey.bin");
+    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) = files_row(&conn, "data/holey.bin");
     assert_eq!(etype, "file");
     assert!(hash.is_none(), "detectable sparse map must still win");
     assert_eq!(size, 40960);
