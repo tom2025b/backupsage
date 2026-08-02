@@ -657,6 +657,32 @@ fn pick_keep(rows: &[Row], members: &[usize], kind: &str) -> Option<(usize, Stri
     Some((best, reason.to_string()))
 }
 
+/// The keeper-star rule (issue #9): a member is an *actionable* duplicate
+/// candidate only when its distance to the keeper was directly measured and
+/// is within the run's threshold. Members that are in the group only through
+/// a chain of pairwise matches (transitive-only) stay reviewable but must
+/// never be selected automatically. Keepers, shadowed rows and hardlinks are
+/// never actionable. Fails closed on anything unknown.
+fn member_is_actionable(
+    kind: &str,
+    is_keep: bool,
+    shadowed: bool,
+    hardlink: bool,
+    hamming_to_keep: Option<u32>,
+    threshold: u32,
+) -> bool {
+    if is_keep || shadowed || hardlink {
+        return false;
+    }
+    match kind {
+        // Exact members share a content hash with the keeper — identity, not
+        // an estimate; distance is 0 by definition.
+        "exact" => true,
+        "near" => matches!(hamming_to_keep, Some(d) if d <= threshold),
+        _ => false,
+    }
+}
+
 /// Paths that look like copy artifacts: `img (1).jpg`, `img_1.jpg`,
 /// `img copy.jpg`.
 fn has_conflict_marker(path: &str) -> bool {
