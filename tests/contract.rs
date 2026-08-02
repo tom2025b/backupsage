@@ -3,7 +3,8 @@
 //!
 //! The five JSON surfaces: `dedup --json`, `search --json`,
 //! `search --all --json`, `master list --json`, `master verify --json` —
-//! plus completed-with-skips variants of the two that have one (seven
+//! plus completed-with-skips variants of the two that have one, plus the
+//! keeper-star chain corpus (#9) pinned in `dedup_chain.json` (eight
 //! fixtures total).
 //! Run-varying fields (temp paths, `indexed_unix`) are normalized before
 //! comparison; everything else in the corpus is deterministic by
@@ -140,9 +141,10 @@ fn assert_matches_fixture(name: &str, actual: serde_json::Value) {
 /// EXIF-dated TIFF pair so `exif_unix`/`best_ts_source` freeze non-null.
 /// Fixed mtimes; every byte reproducible.
 ///
-/// Group order in the dedup report is deterministic only because every
-/// group's reclaimable_bytes is distinct (ties fall back to HashMap
-/// iteration order in src/dedup.rs) — keep it that way when extending.
+/// Group order in the dedup report is fully deterministic since #9: equal
+/// primary sort keys tie-break on the smallest member identity in
+/// src/dedup.rs, so extending the corpus with equal-reclaimable groups is
+/// safe.
 fn build_corpus(dir: &Path) -> (PathBuf, PathBuf, String) {
     let payload = b"shared payload magicterm bytes for exact dedup coverage\n".to_vec();
     let tiff = tiff_with_exif_date("2019:06:01 12:00:00");
