@@ -78,8 +78,7 @@ fn pax_1_0_sparse_indexes_name_only_under_real_name() {
 
     // Real-name row, name-only: no hash of misread condensed bytes, logical
     // size from GNU.sparse.realsize, SPARSE flagged.
-    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
-        files_row(&conn, "data/real.bin");
+    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) = files_row(&conn, "data/real.bin");
     assert_eq!(etype, "file");
     assert!(
         hash.is_none(),
@@ -141,8 +140,7 @@ fn pax_0_x_sparse_indexes_name_only_with_logical_size() {
 
     let (summary, conn) = index_tar_bytes(dir.path(), "pax00.tar", &bytes);
 
-    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
-        files_row(&conn, "data/holey.bin");
+    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) = files_row(&conn, "data/holey.bin");
     assert_eq!(etype, "file");
     assert!(hash.is_none());
     assert_eq!(size, 40960, "logical size comes from GNU.sparse.size");
