@@ -87,6 +87,10 @@ pub struct IndexSummary {
     /// PAX-sparse entries (0.0/0.1/1.0) — unsupported by tar-rs, indexed
     /// name-only so misread condensed bytes never reach hash or FTS.
     pub files_sparse_unsupported: u64,
+    /// Entries whose pax block held segments tar-rs could not parse
+    /// (e.g. legal values containing raw newlines). Content is still
+    /// indexed; only the extended metadata was unreadable.
+    pub entries_pax_unparsed: u64,
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────
@@ -675,25 +679,30 @@ fn index_tar(
         //   the sparse-map preamble, under a synthetic GNUSparseFile.<pid>
         //   path). Hashing that would poison content and FTS: index
         //   name-only under the real name instead, and warn.
-        // - An unreadable pax block can hide a sparse map: fail the entry
-        //   closed (name-only + READ_ERROR), never index it unflagged.
+        // - Unparsable pax SEGMENTS are not treated as hidden sparse maps:
+        //   tar-rs splits pax blocks on raw newlines, so a legal value
+        //   containing '\n' (xattrs, newline-bearing filenames) yields
+        //   spurious Err segments while sparse records still parse as their
+        //   own segments — and a sparse record NO tool can parse is not a
+        //   sparse map for extractors either. Content stays indexed; the
+        //   unreadable metadata is counted and warned, never silent.
         let mut extra_flags = 0i64;
         if entry_type == tar::EntryType::GNUSparse {
             extra_flags |= flags::SPARSE;
         }
         let mut pax_sparse = false;
-        let mut pax_error = false;
+        let mut pax_unparsed = false;
         let mut sparse_real_name: Option<Vec<u8>> = None;
         let mut sparse_real_size: Option<u64> = None;
         match entry.pax_extensions() {
             Ok(Some(pax)) => {
                 for ext in pax {
                     let Ok(ext) = ext else {
-                        pax_error = true;
+                        pax_unparsed = true;
                         continue;
                     };
                     let Ok(key) = ext.key() else {
-                        pax_error = true;
+                        pax_unparsed = true;
                         continue;
                     };
                     if key.starts_with("GNU.sparse") {
@@ -718,12 +727,15 @@ fn index_tar(
                 }
             }
             Ok(None) => {}
-            Err(_) => pax_error = true,
+            Err(_) => pax_unparsed = true,
+        }
+        if pax_unparsed {
+            run.summary.entries_pax_unparsed += 1;
         }
 
         let size = entry.size();
 
-        if pax_sparse || pax_error {
+        if pax_sparse {
             let (real_path, real_raw) = match &sparse_real_name {
                 Some(bytes) => store::capture_text(bytes),
                 None => (entry_path.clone(), path_raw.clone()),
@@ -744,13 +756,11 @@ fn index_tar(
                 phash: None,
                 exif_unix: None,
                 exif_src: None,
-                flags: extra_flags | if pax_error { flags::READ_ERROR } else { 0 },
+                flags: extra_flags,
                 fts_content: "",
             };
             run.record(&rec, None)?;
-            if pax_sparse {
-                run.summary.files_sparse_unsupported += 1;
-            }
+            run.summary.files_sparse_unsupported += 1;
             continue;
         }
         let mut outcome = process_reader(&mut entry, size, &entry_path, opts, &mut |msg| {

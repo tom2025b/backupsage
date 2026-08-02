@@ -492,13 +492,23 @@ fn print_index_summary(s: &IndexSummary) {
     }
     if s.files_sparse_unsupported > 0 {
         println!(
-            "warning: {} entr{} use unsupported PAX sparse dialects — indexed \
-             name-only (re-create with `tar --format=gnu --sparse` to index content)",
-            s.files_sparse_unsupported,
+            "warning: {} unsupported PAX sparse dialects — indexed name-only \
+             (re-create with `tar --format=gnu --sparse` to index content)",
             if s.files_sparse_unsupported == 1 {
-                "y"
+                "1 entry uses".to_string()
             } else {
-                "ies"
+                format!("{} entries use", s.files_sparse_unsupported)
+            }
+        );
+    }
+    if s.entries_pax_unparsed > 0 {
+        println!(
+            "note: {} carried unreadable pax metadata segments — content was \
+             still indexed",
+            if s.entries_pax_unparsed == 1 {
+                "1 entry".to_string()
+            } else {
+                format!("{} entries", s.entries_pax_unparsed)
             }
         );
     }

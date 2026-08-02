@@ -152,55 +152,82 @@ fn pax_0_x_sparse_indexes_name_only_with_logical_size() {
     assert_eq!(summary.files_sparse_unsupported, 1);
 }
 
-/// A malformed PAX extended header must fail the affected entry closed
-/// (name-only + READ_ERROR), never index it as an ordinary hashed file —
-/// a broken pax block can hide a sparse map.
+/// Unparsable pax SEGMENTS (real GNU tar emits them for legal values with
+/// raw newlines — xattrs, newline filenames) must NOT strip the entry of
+/// its content: the file stays hashed and searchable, and the unreadable
+/// metadata is counted so it is loud, never silent.
 #[test]
-fn malformed_pax_extensions_fail_the_entry_closed() {
+fn unparsable_pax_segments_warn_but_keep_content() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Hand-built: an 'x' (XHeader) member whose body is not "len key=value"
-    // records, followed by a normal member it would have applied to.
+    // Hand-built 'x' (XHeader) member whose body is not "len key=value"
+    // records, followed by the member it applies to.
     let mut bytes = Vec::new();
-    let garbage = b"this is not a pax record at all";
+    xheader_raw(&mut bytes, b"this is not a pax record at all");
+    plain_member_raw(&mut bytes, "data/xattred.txt", b"real content stays searchword");
+    plain_member_raw(&mut bytes, "after/clean.txt", b"cleansentinel word");
+    bytes.extend_from_slice(&[0u8; 1024]); // end-of-archive blocks
+
+    let (summary, conn) = index_tar_bytes(dir.path(), "badpax.tar", &bytes);
+
+    let (etype, _kind, _size, _mtime, hash, _phash, _exif, flg) =
+        files_row(&conn, "data/xattred.txt");
+    assert_eq!(etype, "file");
+    assert!(
+        hash.is_some(),
+        "unreadable pax metadata must not cost the file its hash"
+    );
+    assert_eq!(flg & flags::SPARSE, 0);
+    assert_eq!(fts_hits(&conn, "searchword"), 1, "content stays searchable");
+    assert_eq!(summary.entries_pax_unparsed, 1, "unreadable metadata is counted");
+    assert_eq!(summary.files_sparse_unsupported, 0);
+
+    let (_, _, _, _, shash, _, _, _) = files_row(&conn, "after/clean.txt");
+    assert!(shash.is_some());
+}
+
+/// A parseable GNU.sparse record still routes the entry name-only even when
+/// it sits next to garbage segments in the same pax block — fail-open on
+/// broken segments never fails open on a *detectable* sparse map.
+#[test]
+fn sparse_record_beside_garbage_segments_still_detected() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut bytes = Vec::new();
+    // "25 GNU.sparse.size=40960\n" is a valid length-prefixed record (25
+    // bytes total including its own length field and newline).
+    xheader_raw(&mut bytes, b"garbage line\n25 GNU.sparse.size=40960\n");
+    plain_member_raw(&mut bytes, "data/holey.bin", b"condensed-fragments");
+    plain_member_raw(&mut bytes, "after/ok.txt", b"mixedsentinel word");
+    bytes.extend_from_slice(&[0u8; 1024]);
+
+    let (summary, conn) = index_tar_bytes(dir.path(), "mixedpax.tar", &bytes);
+
+    let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
+        files_row(&conn, "data/holey.bin");
+    assert_eq!(etype, "file");
+    assert!(hash.is_none(), "detectable sparse map must still win");
+    assert_eq!(size, 40960);
+    assert!(flg & flags::SPARSE != 0);
+    assert_eq!(summary.files_sparse_unsupported, 1);
+    assert_eq!(summary.entries_pax_unparsed, 1);
+
+    let (_, _, _, _, shash, _, _, _) = files_row(&conn, "after/ok.txt");
+    assert!(shash.is_some());
+}
+
+/// Raw-bytes 'x' XHeader member with an arbitrary body.
+fn xheader_raw(bytes: &mut Vec<u8>, body: &[u8]) {
     let mut xh = tar::Header::new_ustar();
     xh.set_entry_type(tar::EntryType::XHeader);
     xh.set_path("paxheader/next").unwrap();
-    xh.set_size(garbage.len() as u64);
+    xh.set_size(body.len() as u64);
     xh.set_mode(0o644);
     xh.set_mtime(1_700_000_001);
     xh.set_cksum();
     bytes.extend_from_slice(xh.as_bytes());
-    bytes.extend_from_slice(garbage);
+    bytes.extend_from_slice(body);
     bytes.resize(bytes.len().div_ceil(512) * 512, 0);
-
-    let payload = b"payload that must not be trusted";
-    let mut fh = tar::Header::new_ustar();
-    fh.set_path("data/suspect.bin").unwrap();
-    fh.set_size(payload.len() as u64);
-    fh.set_mode(0o644);
-    fh.set_mtime(1_700_000_001);
-    fh.set_cksum();
-    bytes.extend_from_slice(fh.as_bytes());
-    bytes.extend_from_slice(payload);
-    bytes.resize(bytes.len().div_ceil(512) * 512, 0);
-
-    plain_member_raw(&mut bytes, "after/clean.txt", b"cleansentinel word");
-    bytes.extend_from_slice(&[0u8; 1024]); // end-of-archive blocks
-
-    let (_summary, conn) = index_tar_bytes(dir.path(), "badpax.tar", &bytes);
-
-    let (etype, _kind, _size, _mtime, hash, _phash, _exif, flg) =
-        files_row(&conn, "data/suspect.bin");
-    assert_eq!(etype, "file");
-    assert!(
-        hash.is_none(),
-        "entry under an unreadable pax header must not be hashed"
-    );
-    assert!(flg & flags::READ_ERROR != 0);
-
-    let (_, _, _, _, shash, _, _, _) = files_row(&conn, "after/clean.txt");
-    assert!(shash.is_some(), "indexing continues after the failed entry");
 }
 
 /// Raw-bytes twin of `plain_member` for hand-assembled archives.
