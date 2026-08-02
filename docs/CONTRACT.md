@@ -9,9 +9,11 @@ which versions) is tracked separately in issue #57.
 
 Every surface below is frozen as a committed fixture under
 `tests/fixtures/contract/` and compared on every test run by
-`tests/contract.rs` — seven fixtures: one per surface plus
+`tests/contract.rs` — eight fixtures: one per surface plus
 completed-with-skips variants of `search --all --json` and `dedup --json`
-(populated `skipped[]` / `archives_offline`):
+(populated `skipped[]` / `archives_offline`), plus `dedup_chain.json`,
+which pins the keeper-star fields (#9) at non-degenerate values — a real
+transitive-only member with `actionable: false` and `hamming_to_keep > 3`:
 
 ```bash
 cargo test --test contract          # verify against the frozen contract
@@ -31,7 +33,7 @@ BackupSage never rewrites or deletes from an archive.
 
 | Surface | Shape | Status |
 |---|---|---|
-| `dedup --json` | Typed structs in `src/report.rs`, top-level `"version": 1` | **Stable.** Versioned, additive-only, consumed by scripts and the future web UI. |
+| `dedup --json` | Typed structs in `src/report.rs`, top-level `"version": 1` | **Stable.** Versioned, additive-only, consumed by scripts and the future web UI. v1.0.2 (#9) added `Member.actionable`, `Group.review_only_bytes`, `Summary.transitive_only_files`/`review_only_bytes`, `params.actionable_rule` — additive, still version 1. `reclaimable_bytes`/`duplicate_files` now count only keeper-star-safe members (correctness fix: previously inflated by transitive-only members whose distance to the keeper exceeds the threshold). |
 | `search --json` | `{query, hits[], truncated}`; hits carry `path`, `matches`, `snippet`, and `path_bytes` (hex) only for non-UTF-8 paths | **Frozen-as-observed.** No version field yet; fixture-protected; changes must be additive. |
 | `search --all --json` | `{archives[{archive, truncated, hits[]}], skipped[{archive, reason}]}` | **Frozen-as-observed.** Same rules as `search --json`. |
 | `master list --json` | Array of `{archive_id, label, source, source_type, db_path, schema_version, files, completed, status, indexed_unix}` | **Frozen-as-observed.** Same rules. |
