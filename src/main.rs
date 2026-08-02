@@ -447,6 +447,7 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
             (backupsage::store::flags::SPARSE, "sparse"),
             (backupsage::store::flags::SHADOWED, "shadowed"),
             (backupsage::store::flags::DECODE_FAILED, "decode-failed"),
+            (backupsage::store::flags::PAX_UNPARSED, "pax-unparsed"),
         ] {
             if fl & bit != 0 {
                 markers.push(name);
@@ -488,6 +489,28 @@ fn print_index_summary(s: &IndexSummary) {
         println!(
             "Truncated: {} files larger than the text cap (raise with --max-file-size)",
             s.files_truncated
+        );
+    }
+    if s.files_sparse_unsupported > 0 {
+        println!(
+            "warning: {} unsupported PAX sparse dialects — indexed name-only \
+             (re-create with `tar --format=gnu --sparse` to index content)",
+            if s.files_sparse_unsupported == 1 {
+                "1 entry uses".to_string()
+            } else {
+                format!("{} entries use", s.files_sparse_unsupported)
+            }
+        );
+    }
+    if s.entries_pax_unparsed > 0 {
+        println!(
+            "note: {} carried unreadable pax metadata segments — content was \
+             still indexed",
+            if s.entries_pax_unparsed == 1 {
+                "1 entry".to_string()
+            } else {
+                format!("{} entries", s.entries_pax_unparsed)
+            }
         );
     }
     println!("Database : {}", s.db_path.display());
