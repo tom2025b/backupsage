@@ -127,6 +127,55 @@ fn metadata_only_never_reads_content() {
     assert_eq!(summary.files_hashed, 0);
 }
 
+/// Found by adversarial review: metadata-only must record the REAL name
+/// and logical size for PAX-sparse entries (both come from headers — no
+/// content read needed), never the synthetic GNUSparseFile.<pid> wrapper
+/// path or the condensed byte count.
+#[test]
+fn metadata_only_keeps_real_names_for_pax_sparse() {
+    let dir = tempfile::tempdir().unwrap();
+    let condensed = b"1\n0\n65536\nfragments".to_vec();
+    let mut builder = tar::Builder::new(Vec::new());
+    let exts: Vec<(&str, &[u8])> = vec![
+        ("GNU.sparse.major", b"1".as_slice()),
+        ("GNU.sparse.minor", b"0"),
+        ("GNU.sparse.name", b"data/real.bin"),
+        ("GNU.sparse.realsize", b"65536"),
+    ];
+    builder
+        .append_pax_extensions(exts.iter().map(|(k, v)| (*k, *v)))
+        .unwrap();
+    let mut h = tar::Header::new_ustar();
+    h.set_size(condensed.len() as u64);
+    h.set_mode(0o644);
+    h.set_mtime(1_700_000_001);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, "GNUSparseFile.1234/real.bin", condensed.as_slice())
+        .unwrap();
+    let bytes = builder.into_inner().unwrap();
+    let archive = write_archive(dir.path(), "mopax.tar", &bytes);
+    let opts = IndexOptions {
+        mode: ContentMode::MetadataOnly,
+        ..IndexOptions::default()
+    };
+    let summary = indexer::run_index(&archive, None, &opts).unwrap();
+    let conn = rusqlite::Connection::open(&summary.db_path).unwrap();
+
+    let (_, _, size, _, hash, _, _, _) = files_row(&conn, "data/real.bin");
+    assert_eq!(size, 65536, "logical size from GNU.sparse.realsize");
+    assert!(hash.is_none());
+    let synthetic: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path LIKE 'GNUSparseFile%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(synthetic, 0, "synthetic wrapper path must not leak");
+    assert_eq!(summary.files_sparse_unsupported, 1, "still counted");
+}
+
 #[test]
 fn old_index_without_mode_key_reads_as_full() {
     let dir = tempfile::tempdir().unwrap();
