@@ -582,6 +582,52 @@ fn crafted_leading_newline_block_pins_fail_open() {
     assert_eq!(summary.files_sparse_unsupported, 0);
 }
 
+/// #65: a hardlink whose target path's LATEST row has no hash (name-only
+/// PAX-sparse shadowing an earlier regular file) must resolve to NULL —
+/// on extraction the link points at the unknown-content version, so
+/// inheriting the shadowed row's stale hash would lie.
+#[test]
+fn hardlink_to_shadowed_path_does_not_inherit_stale_hash() {
+    let mut bytes = Vec::new();
+    // Regular file, then the SAME path again as unsupported PAX sparse
+    // (sparse record, no name key → real name = header path). The second
+    // row shadows the first and carries no hash.
+    plain_member_raw(&mut bytes, "data/file.bin", b"original content bytes");
+    xheader_raw(&mut bytes, b"25 GNU.sparse.size=40960\n");
+    plain_member_raw(&mut bytes, "data/file.bin", b"condensed");
+    hardlink_raw(&mut bytes, "data/alias", "data/file.bin");
+    // Paired positive: a healthy target must still resolve.
+    plain_member_raw(&mut bytes, "ok/plain.txt", b"healthy target bytes");
+    hardlink_raw(&mut bytes, "ok/alias", "ok/plain.txt");
+    bytes.extend_from_slice(&[0u8; 1024]);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (_summary, conn) = index_tar_bytes(dir.path(), "hl65.tar", &bytes);
+
+    let (_, _, _, _, ahash, _, _, _) = files_row(&conn, "data/alias");
+    assert!(
+        ahash.is_none(),
+        "hardlink must not inherit the SHADOWED row's stale hash (#65)"
+    );
+    let (_, _, _, _, ohash, _, _, _) = files_row(&conn, "ok/alias");
+    let (_, _, _, _, thash, _, _, _) = files_row(&conn, "ok/plain.txt");
+    assert!(ohash.is_some(), "healthy hardlink resolution still works");
+    assert_eq!(ohash, thash);
+}
+
+/// Raw-bytes hardlink member.
+fn hardlink_raw(bytes: &mut Vec<u8>, path: &str, target: &str) {
+    let mut h = tar::Header::new_ustar();
+    h.set_entry_type(tar::EntryType::Link);
+    h.set_path(path).unwrap();
+    h.set_link_name(target).unwrap();
+    h.set_size(0);
+    h.set_mode(0o644);
+    h.set_mtime(1_700_000_001);
+    h.set_cksum();
+    bytes.extend_from_slice(h.as_bytes());
+}
+
 /// Raw-bytes 'x' XHeader member with an arbitrary body.
 fn xheader_raw(bytes: &mut Vec<u8>, body: &[u8]) {
     let mut xh = tar::Header::new_ustar();
