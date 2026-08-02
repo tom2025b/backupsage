@@ -35,11 +35,9 @@ fn mode_is_recorded_in_meta_and_defaults_to_full() {
     ] {
         let (_s, conn) = index_with_mode(dir.path(), &format!("{expect}.tar"), &files, mode);
         let got: String = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key='content_mode'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM meta WHERE key='content_mode'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(got, expect);
     }
