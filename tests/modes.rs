@@ -128,3 +128,75 @@ fn metadata_only_never_reads_content() {
     assert_eq!(fts, 0, "no content tokens in a metadata-only index");
     assert_eq!(summary.files_hashed, 0);
 }
+
+// ── CLI-level read-time gates ───────────────────────────────────────────────
+
+fn bin() -> std::process::Command {
+    std::process::Command::new(env!("CARGO_BIN_EXE_backupsage"))
+}
+
+fn run(args: &[&str]) -> std::process::Output {
+    bin().args(args).output().expect("binary runs")
+}
+
+fn stdout(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn stderr(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn read_time_gates_reject_and_degrade_clearly() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("notes/doc.txt", b"findable gateword here".to_vec())];
+
+    // One archive per mode, indexed through the real CLI.
+    for mode in ["full", "search-only", "metadata-only"] {
+        let archive = write_archive(dir.path(), &format!("{mode}.tar"), &build_tar(&files));
+        let out = run(&["index", archive.to_str().unwrap(), "--mode", mode]);
+        assert!(out.status.success(), "index --mode {mode} failed");
+    }
+    let db = |mode: &str| {
+        dir.path()
+            .join(format!("{mode}.tar.db"))
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // metadata-only: search rejects clearly, exit 1, never "No results".
+    let out = run(&["search", "gateword", "-i", &db("metadata-only")]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("metadata-only"), "{err}");
+    assert!(err.contains("--mode"), "{err}");
+
+    // search-only: search works…
+    let out = run(&["search", "gateword", "-i", &db("search-only")]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("doc.txt"), "{}", stdout(&out));
+    // …snippets degrade with an explicit note…
+    let out = run(&["search", "gateword", "-i", &db("search-only"), "--snippets"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stderr(&out).contains("search-only"), "{}", stderr(&out));
+    // …and JSON carries the mode with null match counts.
+    let out = run(&["search", "gateword", "-i", &db("search-only"), "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v["mode"], "search-only");
+    assert!(v["hits"][0]["matches"].is_null(), "{v}");
+
+    // full: JSON mode present, matches numeric — unchanged semantics.
+    let out = run(&["search", "gateword", "-i", &db("full"), "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v["mode"], "full");
+    assert!(v["hits"][0]["matches"].is_number(), "{v}");
+
+    // top explains itself on non-full modes.
+    let out = run(&["top", "-i", &db("search-only")]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("search-only"), "{}", stdout(&out));
+    let out = run(&["top", "-i", &db("metadata-only")]);
+    assert!(stdout(&out).contains("metadata-only"), "{}", stdout(&out));
+}
