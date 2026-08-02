@@ -344,7 +344,9 @@ impl<'a> IndexRun<'a> {
             match o.kind {
                 "text" => {
                     self.summary.files_indexed += 1;
-                    if self.opts.word_stats {
+                    // word_freq is the frequency-leakage surface: only
+                    // full mode maintains it (#39).
+                    if self.opts.word_stats && self.opts.mode == ContentMode::Full {
                         if let Some(text) = &o.fts_text {
                             accumulate_words(text, &mut self.word_buf);
                             if self.word_buf.len() >= WORD_FLUSH_THRESHOLD {

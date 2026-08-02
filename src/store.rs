@@ -195,7 +195,10 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
     set_meta(&conn, "text_cap", &meta.text_cap.to_string())?;
     set_meta(&conn, "media_cap", &meta.media_cap.to_string())?;
     set_meta(&conn, "created_unix", &created.to_string())?;
-    set_meta(&conn, "word_stats", if meta.word_stats { "1" } else { "0" })?;
+    // Non-full modes never populate word_freq — record that honestly so
+    // `top`'s explanation matches reality regardless of the CLI flag.
+    let word_stats_on = meta.word_stats && meta.mode == crate::indexer::ContentMode::Full;
+    set_meta(&conn, "word_stats", if word_stats_on { "1" } else { "0" })?;
     set_meta(&conn, "content_mode", meta.mode.as_str())?;
     // This index captures raw path bytes (v1.0.1); readers treat the
     // columns as NULL on older indexes.

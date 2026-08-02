@@ -93,3 +93,38 @@ fn search_only_stores_no_plaintext_but_still_matches() {
         .unwrap();
     assert_eq!(ws, "0");
 }
+
+#[test]
+fn metadata_only_never_reads_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let (summary, conn) = index_with_mode(
+        dir.path(),
+        "mo.tar",
+        &[
+            ("doc.txt", b"text that must never be read".to_vec()),
+            ("pic.png", png_bytes(3, 64, 48)),
+        ],
+        ContentMode::MetadataOnly,
+    );
+    for path in ["doc.txt", "pic.png"] {
+        let (etype, _kind, size, mtime, hash, phash, exif, _flg) = files_row(&conn, path);
+        assert_eq!(etype, "file");
+        assert!(size > 0, "header metadata kept");
+        assert!(mtime.is_some());
+        assert!(hash.is_none(), "{path}: content must not be hashed");
+        assert!(phash.is_none());
+        assert!(exif.is_none());
+    }
+    // Media kinds still classified from the name.
+    let (_, kind, _, _, _, _, _, _) = files_row(&conn, "pic.png");
+    assert_eq!(kind, "image");
+    let fts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files_fts WHERE files_fts MATCH 'read'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fts, 0, "no content tokens in a metadata-only index");
+    assert_eq!(summary.files_hashed, 0);
+}
