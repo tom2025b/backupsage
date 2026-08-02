@@ -665,22 +665,94 @@ fn index_tar(
             continue;
         }
 
-        // Sparse entries: tar-rs yields the condensed stream, so the hash is
-        // not the logical file's hash — flag and let dedup exclude them.
+        // Sparse handling is per-dialect (#63, child of #8):
+        // - Old-GNU ('S'): tar-rs expands the map and yields the LOGICAL
+        //   stream (holes as zeros) with loud errors on malformed maps, so
+        //   the stored hash IS the logical file's hash. Flagged so dedup
+        //   keeps excluding them (conservative).
+        // - PAX 0.0/0.1/1.0 (GNU.sparse.* pax keys): unimplemented in
+        //   tar-rs — reading yields the condensed fragments (for 1.0 with
+        //   the sparse-map preamble, under a synthetic GNUSparseFile.<pid>
+        //   path). Hashing that would poison content and FTS: index
+        //   name-only under the real name instead, and warn.
+        // - An unreadable pax block can hide a sparse map: fail the entry
+        //   closed (name-only + READ_ERROR), never index it unflagged.
         let mut extra_flags = 0i64;
         if entry_type == tar::EntryType::GNUSparse {
             extra_flags |= flags::SPARSE;
         }
-        if let Ok(Some(pax)) = entry.pax_extensions() {
-            for ext in pax.flatten() {
-                if ext.key().is_ok_and(|k| k.starts_with("GNU.sparse")) {
-                    extra_flags |= flags::SPARSE;
-                    break;
+        let mut pax_sparse = false;
+        let mut pax_error = false;
+        let mut sparse_real_name: Option<Vec<u8>> = None;
+        let mut sparse_real_size: Option<u64> = None;
+        match entry.pax_extensions() {
+            Ok(Some(pax)) => {
+                for ext in pax {
+                    let Ok(ext) = ext else {
+                        pax_error = true;
+                        continue;
+                    };
+                    let Ok(key) = ext.key() else {
+                        pax_error = true;
+                        continue;
+                    };
+                    if key.starts_with("GNU.sparse") {
+                        pax_sparse = true;
+                        extra_flags |= flags::SPARSE;
+                        match key {
+                            "GNU.sparse.name" => {
+                                sparse_real_name = Some(ext.value_bytes().to_vec());
+                            }
+                            // 1.0 uses realsize; 0.0/0.1 use size — both are
+                            // the logical (hole-filled) length.
+                            "GNU.sparse.realsize" | "GNU.sparse.size" => {
+                                sparse_real_size = ext
+                                    .value()
+                                    .ok()
+                                    .and_then(|v| v.parse::<u64>().ok())
+                                    .or(sparse_real_size);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
+            Ok(None) => {}
+            Err(_) => pax_error = true,
         }
 
         let size = entry.size();
+
+        if pax_sparse || pax_error {
+            let (real_path, real_raw) = match &sparse_real_name {
+                Some(bytes) => store::capture_text(bytes),
+                None => (entry_path.clone(), path_raw.clone()),
+            };
+            let rec = EntryRecord {
+                path: &real_path,
+                path_raw: real_raw.as_deref(),
+                entry_type: "file",
+                link_target: None,
+                link_target_raw: None,
+                size: sparse_real_size.unwrap_or(size),
+                mtime_unix: mtime,
+                mode,
+                kind: "binary",
+                content_hash: None,
+                img_w: None,
+                img_h: None,
+                phash: None,
+                exif_unix: None,
+                exif_src: None,
+                flags: extra_flags | if pax_error { flags::READ_ERROR } else { 0 },
+                fts_content: "",
+            };
+            run.record(&rec, None)?;
+            if pax_sparse {
+                run.summary.files_sparse_unsupported += 1;
+            }
+            continue;
+        }
         let mut outcome = process_reader(&mut entry, size, &entry_path, opts, &mut |msg| {
             pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
         });

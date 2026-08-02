@@ -490,6 +490,14 @@ fn print_index_summary(s: &IndexSummary) {
             s.files_truncated
         );
     }
+    if s.files_sparse_unsupported > 0 {
+        println!(
+            "warning: {} entr{} use unsupported PAX sparse dialects — indexed \
+             name-only (re-create with `tar --format=gnu --sparse` to index content)",
+            s.files_sparse_unsupported,
+            if s.files_sparse_unsupported == 1 { "y" } else { "ies" }
+        );
+    }
     println!("Database : {}", s.db_path.display());
 }
 

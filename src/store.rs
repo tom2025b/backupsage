@@ -23,7 +23,9 @@ pub mod flags {
     pub const IMAGE_OVER_CAP: i64 = 2;
     /// Read error mid-entry — name-only row.
     pub const READ_ERROR: i64 = 4;
-    /// GNU/PAX sparse entry — hash covers the condensed stream, not the file.
+    /// Sparse entry. Old-GNU ('S'): tar-rs expands holes, the hash covers
+    /// the LOGICAL stream. PAX 0.0/0.1/1.0: unsupported by tar-rs — indexed
+    /// name-only, no hash at all (#63). Dedup excludes both conservatively.
     pub const SPARSE: i64 = 8;
     /// A later entry in the same source has the same path and wins on extract.
     pub const SHADOWED: i64 = 16;

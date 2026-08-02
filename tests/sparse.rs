@@ -25,7 +25,7 @@ fn index_tar_bytes(
 
 fn fts_hits(conn: &rusqlite::Connection, word: &str) -> i64 {
     conn.query_row(
-        "SELECT COUNT(*) FROM fts WHERE fts MATCH ?1",
+        "SELECT COUNT(*) FROM files_fts WHERE files_fts MATCH ?1",
         [word],
         |r| r.get(0),
     )
