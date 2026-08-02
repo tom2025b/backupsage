@@ -124,6 +124,12 @@ O(n²) scans. Empty files, sparse tar entries and symlinks are excluded;
 hardlinks are shown but never counted as reclaimable; a path stored twice
 in one tar is reported as intra-archive waste.
 
+Near groups are chains of pairwise matches, so a member can be farther
+than the threshold from the kept copy. Such transitive-only members are
+tagged `[review-only]` (JSON: `"actionable": false`) and excluded from
+reclaimable counts — only members measured directly within threshold of
+the keeper are ever safe for automatic action (see ADR 0004).
+
 | Flag | Description |
 |------|-------------|
 | `--exact-only` / `--near-only` | Restrict the match type |
