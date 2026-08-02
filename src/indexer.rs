@@ -781,6 +781,32 @@ fn index_tar(
 
         let size = entry.size();
 
+        if opts.mode == ContentMode::MetadataOnly {
+            // Metadata-only (#39): content is never read — header facts
+            // only. The tar iterator skips unread member data on next().
+            let rec = EntryRecord {
+                path: &entry_path,
+                path_raw: path_raw.as_deref(),
+                entry_type: "file",
+                link_target: None,
+                link_target_raw: None,
+                size,
+                mtime_unix: mtime,
+                mode,
+                kind: metadata_kind(&entry_path, size),
+                content_hash: None,
+                img_w: None,
+                img_h: None,
+                phash: None,
+                exif_unix: None,
+                exif_src: None,
+                flags: extra_flags,
+                fts_content: "",
+            };
+            run.record(&rec, None)?;
+            continue;
+        }
+
         if pax_sparse {
             let (real_path, real_raw) = match &sparse_real_name {
                 Some(bytes) => store::capture_text(bytes),
@@ -916,6 +942,21 @@ fn is_binary(data: &[u8]) -> bool {
 }
 
 /// Truncate a path to `max_chars` characters, keeping the tail visible.
+/// Kind classification without reading content — metadata-only mode (#39):
+/// media kinds from the file name, everything else "binary" ("empty" at
+/// size 0). Never claims "text"; that would imply the content was probed.
+pub(crate) fn metadata_kind(path: &str, size: u64) -> &'static str {
+    if size == 0 {
+        return "empty";
+    }
+    match crate::exif_date::media_kind(path) {
+        crate::exif_date::MediaKind::Image => "image",
+        crate::exif_date::MediaKind::Raw => "raw",
+        crate::exif_date::MediaKind::Video => "video",
+        crate::exif_date::MediaKind::Other => "binary",
+    }
+}
+
 pub(crate) fn truncate_path(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();
     if count <= max_chars {

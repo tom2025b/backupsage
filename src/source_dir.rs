@@ -159,6 +159,30 @@ pub(crate) fn index_dir(
         }
 
         let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
+        if opts.mode == crate::indexer::ContentMode::MetadataOnly {
+            // Metadata-only (#39): never open the file — stat facts only.
+            let rec = EntryRecord {
+                path: &rel_path,
+                path_raw: path_raw.as_deref(),
+                entry_type: "file",
+                link_target: None,
+                link_target_raw: None,
+                size,
+                mtime_unix: mtime,
+                mode,
+                kind: crate::indexer::metadata_kind(&rel_path, size),
+                content_hash: None,
+                img_w: None,
+                img_h: None,
+                phash: None,
+                exif_unix: None,
+                exif_src: None,
+                flags: 0,
+                fts_content: "",
+            };
+            run.record(&rec, None)?;
+            continue;
+        }
         let outcome = match File::open(abs) {
             Ok(mut f) => process_reader(&mut f, size, &rel_path, opts, &mut |msg| {
                 pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
