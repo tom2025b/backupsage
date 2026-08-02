@@ -808,6 +808,102 @@ mod tests {
         }
     }
 
+    /// Issue #9 AC1: the full grouping pipeline (MIH candidates → union-find →
+    /// components) must match a brute-force pair oracle at every supported
+    /// threshold, and keeper-star classification must admit exactly the members
+    /// whose directly measured distance to the keeper is within threshold.
+    #[test]
+    fn grouping_matches_brute_force_oracle_at_every_threshold() {
+        // Deterministic corpus: random hashes plus planted CHAINS so the
+        // transitive-only case genuinely occurs (anti-vacuity, asserted below).
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rand = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut hashes: Vec<u64> = (0..1200).map(|_| rand()).collect();
+        // Planted chains A—B—C: d(A,B)=3, d(B,C)=3, disjoint bit sets so
+        // d(A,C)=6 — inside one component at threshold 3, far beyond it pairwise.
+        for i in 0..40 {
+            let a = hashes[i * 13];
+            let b = a ^ (0b111u64 << ((i * 5) % 60));
+            let c = b ^ (0b111u64 << (((i * 5) + 7) % 60));
+            hashes.push(b);
+            hashes.push(c);
+        }
+
+        for threshold in 0..=3u32 {
+            let mut skipped = 0u64;
+            let components =
+                near_components(&hashes, threshold, DEFAULT_BUCKET_CAP, &mut skipped);
+            assert_eq!(skipped, 0, "oracle corpus must not hit the bucket cap");
+
+            // Brute-force oracle: union every pair within threshold, then
+            // compare the resulting components with the pipeline's.
+            let mut uf = UnionFind::new(hashes.len());
+            for a in 0..hashes.len() {
+                for b in (a + 1)..hashes.len() {
+                    if phash::hamming(hashes[a], hashes[b]) <= threshold {
+                        uf.union(a, b);
+                    }
+                }
+            }
+            let mut oracle_clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+            for i in 0..hashes.len() {
+                oracle_clusters.entry(uf.find(i)).or_default().push(i);
+            }
+            let mut oracle: Vec<Vec<usize>> = oracle_clusters
+                .into_values()
+                .filter(|c| c.len() > 1)
+                .collect();
+            for c in &mut oracle {
+                c.sort_unstable();
+            }
+            oracle.sort();
+            assert_eq!(
+                components, oracle,
+                "component mismatch at threshold {threshold}"
+            );
+
+            // Keeper-star: for EVERY possible keeper choice in every component,
+            // classification admits exactly the members measured within threshold.
+            let mut transitive_only_seen = false;
+            for comp in &components {
+                for &keeper in comp {
+                    for &m in comp {
+                        let d = phash::hamming(hashes[keeper], hashes[m]);
+                        let actionable = member_is_actionable(
+                            "near",
+                            m == keeper,
+                            false,
+                            false,
+                            Some(d),
+                            threshold,
+                        );
+                        assert_eq!(
+                            actionable,
+                            m != keeper && d <= threshold,
+                            "keeper-star violated: keeper {keeper}, member {m}, d {d}, t {threshold}"
+                        );
+                        if m != keeper && d > threshold {
+                            transitive_only_seen = true;
+                        }
+                    }
+                }
+            }
+            // Anti-vacuity: at threshold 3 the planted chains MUST produce
+            // transitive-only members, or this test is testing nothing.
+            if threshold == 3 {
+                assert!(
+                    transitive_only_seen,
+                    "corpus produced no transitive-only member"
+                );
+            }
+        }
+    }
+
     #[test]
     fn bucket_cap_skips_and_counts() {
         // 20 001 identical hashes: one bucket per band, all over a cap of 10.
