@@ -301,9 +301,18 @@ fn bless_sparse_fixtures() {
     std::fs::create_dir_all(&out_dir).unwrap();
     let variants: [(&str, &[&str]); 4] = [
         ("sparse-oldgnu.tar", &["--format=gnu"]),
-        ("sparse-pax00.tar", &["--format=posix", "--sparse-version=0.0"]),
-        ("sparse-pax01.tar", &["--format=posix", "--sparse-version=0.1"]),
-        ("sparse-pax10.tar", &["--format=posix", "--sparse-version=1.0"]),
+        (
+            "sparse-pax00.tar",
+            &["--format=posix", "--sparse-version=0.0"],
+        ),
+        (
+            "sparse-pax01.tar",
+            &["--format=posix", "--sparse-version=0.1"],
+        ),
+        (
+            "sparse-pax10.tar",
+            &["--format=posix", "--sparse-version=1.0"],
+        ),
     ];
     for (name, extra) in variants {
         let out = out_dir.join(name);
@@ -380,8 +389,7 @@ fn old_gnu_sparse_matches_gnu_tar_logically_in_all_formats() {
         let dir = tempfile::tempdir().unwrap();
         let (summary, conn) = index_tar_bytes(dir.path(), name, &bytes);
 
-        let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
-            files_row(&conn, "holey.bin");
+        let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) = files_row(&conn, "holey.bin");
         assert_eq!(etype, "file");
         assert_eq!(
             size as u64, expected.logical_size,
@@ -418,8 +426,7 @@ fn real_pax_sparse_dialects_index_name_only() {
         let dir = tempfile::tempdir().unwrap();
         let (summary, conn) = index_tar_bytes(dir.path(), name, &bytes);
 
-        let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) =
-            files_row(&conn, "holey.bin");
+        let (etype, _kind, size, _mtime, hash, _phash, _exif, flg) = files_row(&conn, "holey.bin");
         assert_eq!(etype, "file", "{name}");
         assert!(hash.is_none(), "{name}: PAX sparse must not be hashed");
         assert_eq!(size as u64, expected.logical_size, "{name}: logical size");
@@ -462,7 +469,10 @@ fn fix_chksum(header: &mut [u8]) {
 
 fn patched_oldgnu<F: FnOnce(&mut [u8])>(patch: F) -> Vec<u8> {
     let mut bytes = std::fs::read(sparse_fixture_dir().join("sparse-oldgnu.tar")).unwrap();
-    assert_eq!(bytes[TYPEFLAG_OFF], b'S', "fixture starts with the sparse member");
+    assert_eq!(
+        bytes[TYPEFLAG_OFF], b'S',
+        "fixture starts with the sparse member"
+    );
     patch(&mut bytes);
     fix_chksum(&mut bytes[..512]);
     bytes
@@ -564,7 +574,10 @@ fn crafted_leading_newline_block_pins_fail_open() {
     let (summary, conn) = index_tar_bytes(dir.path(), "e3.tar", &bytes);
     let (_, _, _, _, hash, _, _, flg) = files_row(&conn, "data/e3.bin");
     assert!(hash.is_some());
-    assert_eq!(flg, 0, "pinned: the empty-segment stop is invisible to tar-rs");
+    assert_eq!(
+        flg, 0,
+        "pinned: the empty-segment stop is invisible to tar-rs"
+    );
     assert_eq!(summary.entries_pax_unparsed, 0);
     assert_eq!(summary.files_sparse_unsupported, 0);
 }
