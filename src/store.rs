@@ -240,21 +240,25 @@ pub fn finalize_v3(
     counts: &FinalizeCounts,
     archive_blake3: Option<&str>,
 ) -> Result<()> {
-    // Hardlink hashes: copy from the entry the link points at (latest entry
-    // wins when the path is shadowed — that is what extraction produces).
-    // Indexed by idx_files_path; iterate to resolve link→link chains.
+    // Hardlink hashes: copy from the entry the link points at — the LATEST
+    // row for the target path, because that is what extraction produces
+    // when the path is shadowed. If that latest row has no hash (read
+    // error, unsupported PAX sparse), the link's content is unknown and
+    // the hash stays NULL: skipping ahead to an older shadowed row's hash
+    // would lie about extracted bytes (#65). Indexed by idx_files_path;
+    // iterate to resolve link→link chains.
     for _ in 0..5 {
         let changed = conn.execute(
             "UPDATE files SET content_hash = (
                  SELECT t.content_hash FROM files t
-                 WHERE t.path = files.link_target AND t.content_hash IS NOT NULL
+                 WHERE t.path = files.link_target
                  ORDER BY t.id DESC LIMIT 1)
              WHERE entry_type = 'hardlink'
                AND content_hash IS NULL
                AND link_target IS NOT NULL
-               AND EXISTS (SELECT 1 FROM files t
-                           WHERE t.path = files.link_target
-                             AND t.content_hash IS NOT NULL)",
+               AND (SELECT t.content_hash FROM files t
+                    WHERE t.path = files.link_target
+                    ORDER BY t.id DESC LIMIT 1) IS NOT NULL",
             [],
         )?;
         if changed == 0 {
