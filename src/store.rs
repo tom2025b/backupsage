@@ -46,6 +46,8 @@ pub struct SourceMeta<'a> {
     pub text_cap: u64,
     pub media_cap: u64,
     pub word_stats: bool,
+    /// Content mode (#39) — recorded as the `content_mode` meta key.
+    pub mode: crate::indexer::ContentMode,
 }
 
 /// One indexed entry. `fts_content` is empty for binaries/links — the row is
@@ -177,6 +179,7 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
     set_meta(&conn, "media_cap", &meta.media_cap.to_string())?;
     set_meta(&conn, "created_unix", &created.to_string())?;
     set_meta(&conn, "word_stats", if meta.word_stats { "1" } else { "0" })?;
+    set_meta(&conn, "content_mode", meta.mode.as_str())?;
     // This index captures raw path bytes (v1.0.1); readers treat the
     // columns as NULL on older indexes.
     set_meta(&conn, "path_raw", "1")?;
@@ -325,6 +328,7 @@ mod tests {
             text_cap: 16 * 1024 * 1024,
             media_cap: 64 * 1024 * 1024,
             word_stats: true,
+            mode: crate::indexer::ContentMode::Full,
         }
     }
 

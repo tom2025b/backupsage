@@ -44,6 +44,8 @@ fn run() -> Result<i32> {
                 max_file_size: args.max_file_size,
                 media_cap: args.media_cap,
                 word_stats: !args.no_word_stats,
+                mode: indexer::ContentMode::parse(&args.mode)
+                    .expect("clap validates --mode values"),
             };
             for source in &args.sources {
                 let summary = indexer::run_index(source, args.index.as_deref(), &opts)?;

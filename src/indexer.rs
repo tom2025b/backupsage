@@ -46,6 +46,42 @@ pub const DEFAULT_MEDIA_CAP: u64 = 64 * 1024 * 1024;
 /// Read chunk size; also the hash-feed granularity.
 const CHUNK: usize = 256 * 1024;
 
+/// What an index stores about file CONTENT (#39). Recorded as the
+/// `content_mode` meta key; an absent key on older indexes means `Full`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentMode {
+    /// Everything: plaintext FTS, word stats, hashes, media metadata.
+    #[default]
+    Full,
+    /// Contentless FTS (tokens indexed, text not stored — snippets and
+    /// match counts are structurally unavailable), hashes and media
+    /// metadata kept, word stats dropped. Tokens and their frequencies
+    /// still leak; this is not encryption or a privacy boundary.
+    SearchOnly,
+    /// Content is never read: names, sizes, times, entry types only.
+    /// No hashes, no FTS content, no media metadata. Content search is
+    /// rejected; dedup cannot see these archives (#71 reports why).
+    MetadataOnly,
+}
+
+impl ContentMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContentMode::Full => "full",
+            ContentMode::SearchOnly => "search-only",
+            ContentMode::MetadataOnly => "metadata-only",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "full" => Some(ContentMode::Full),
+            "search-only" => Some(ContentMode::SearchOnly),
+            "metadata-only" => Some(ContentMode::MetadataOnly),
+            _ => None,
+        }
+    }
+}
+
 pub struct IndexOptions {
     /// Per-file cap on retained content for text indexing.
     pub max_file_size: u64,
@@ -54,6 +90,8 @@ pub struct IndexOptions {
     pub media_cap: u64,
     /// Whether to maintain the word_freq table used by `top`.
     pub word_stats: bool,
+    /// What to store about content (#39): full, search-only, metadata-only.
+    pub mode: ContentMode,
 }
 
 impl Default for IndexOptions {
@@ -62,6 +100,7 @@ impl Default for IndexOptions {
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             media_cap: DEFAULT_MEDIA_CAP,
             word_stats: true,
+            mode: ContentMode::Full,
         }
     }
 }
@@ -466,6 +505,7 @@ pub(crate) fn create_db_with_fallback(
         text_cap: opts.max_file_size,
         media_cap: opts.media_cap,
         word_stats: opts.word_stats,
+        mode: opts.mode,
     };
     let mut protected = outpath::ProtectedSet::new();
     if meta_type == "dir" {
