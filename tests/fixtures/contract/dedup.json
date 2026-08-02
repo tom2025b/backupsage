@@ -22,6 +22,7 @@
       "max_distance": 2,
       "members": [
         {
+          "actionable": false,
           "archive_id": 1,
           "archive_label": "alpha.tar",
           "best_ts_source": "tar-mtime",
@@ -44,6 +45,7 @@
           "width": 320
         },
         {
+          "actionable": true,
           "archive_id": 2,
           "archive_label": "beta.tar",
           "best_ts_source": "tar-mtime",
@@ -66,7 +68,8 @@
           "width": 320
         }
       ],
-      "reclaimable_bytes": 87198
+      "reclaimable_bytes": 87198,
+      "review_only_bytes": 0
     },
     {
       "group_id": 2,
@@ -74,6 +77,7 @@
       "max_distance": 0,
       "members": [
         {
+          "actionable": false,
           "archive_id": 2,
           "archive_label": "beta.tar",
           "best_ts_source": "tar-mtime",
@@ -97,6 +101,7 @@
           "width": null
         },
         {
+          "actionable": true,
           "archive_id": 1,
           "archive_label": "alpha.tar",
           "best_ts_source": "tar-mtime",
@@ -119,6 +124,7 @@
           "width": null
         },
         {
+          "actionable": true,
           "archive_id": 2,
           "archive_label": "beta.tar",
           "best_ts_source": "tar-mtime",
@@ -141,7 +147,8 @@
           "width": null
         }
       ],
-      "reclaimable_bytes": 112
+      "reclaimable_bytes": 112,
+      "review_only_bytes": 0
     },
     {
       "group_id": 3,
@@ -149,6 +156,7 @@
       "max_distance": 0,
       "members": [
         {
+          "actionable": false,
           "archive_id": 1,
           "archive_label": "alpha.tar",
           "best_ts_source": "exif:DateTimeOriginal",
@@ -171,6 +179,7 @@
           "width": null
         },
         {
+          "actionable": true,
           "archive_id": 2,
           "archive_label": "beta.tar",
           "best_ts_source": "exif:DateTimeOriginal",
@@ -193,11 +202,13 @@
           "width": null
         }
       ],
-      "reclaimable_bytes": 64
+      "reclaimable_bytes": 64,
+      "review_only_bytes": 0
     }
   ],
   "params": {
     "across_only": false,
+    "actionable_rule": "near:direct-to-keeper-within-threshold; exact:always; shadowed/hardlink:never",
     "exact": true,
     "images_grouped_perceptually": true,
     "include_empty": false,
@@ -215,7 +226,9 @@
     "intra_archive_shadowed_bytes": 0,
     "near_buckets_skipped": 0,
     "reclaimable_bytes": 87374,
-    "skipped_archives": []
+    "review_only_bytes": 0,
+    "skipped_archives": [],
+    "transitive_only_files": 0
   },
   "version": 1
 }
