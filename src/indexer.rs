@@ -682,10 +682,13 @@ fn index_tar(
         // - Unparsable pax SEGMENTS are not treated as hidden sparse maps:
         //   tar-rs splits pax blocks on raw newlines, so a legal value
         //   containing '\n' (xattrs, newline-bearing filenames) yields
-        //   spurious Err segments while sparse records still parse as their
-        //   own segments — and a sparse record NO tool can parse is not a
-        //   sparse map for extractors either. Content stays indexed; the
-        //   unreadable metadata is counted and warned, never silent.
+        //   spurious Err segments while GNU-tar-written sparse records still
+        //   parse as their own segments (GNU tar orders them first in the
+        //   block). Content stays indexed; the row is flagged PAX_UNPARSED
+        //   and counted, never silent. Residual, crafted-only (#64 pins
+        //   it): a valid record whose value ENDS in '\n' makes tar-rs stop
+        //   at the empty split segment, hiding later sparse records that
+        //   GNU tar itself would honor — the flag keeps that gap auditable.
         let mut extra_flags = 0i64;
         if entry_type == tar::EntryType::GNUSparse {
             extra_flags |= flags::SPARSE;
@@ -731,6 +734,7 @@ fn index_tar(
         }
         if pax_unparsed {
             run.summary.entries_pax_unparsed += 1;
+            extra_flags |= flags::PAX_UNPARSED;
         }
 
         let size = entry.size();

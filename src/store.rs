@@ -31,6 +31,11 @@ pub mod flags {
     pub const SHADOWED: i64 = 16;
     /// Image decode failed or hit limits — no phash/dims.
     pub const DECODE_FAILED: i64 = 32;
+    /// Some pax segments for this entry were unreadable by tar-rs (legal
+    /// raw-newline values, or crafted blocks). Later records in the same
+    /// block may be invisible to tar-rs — content is indexed, but extended
+    /// metadata is incomplete (#63; residual shapes pinned by #64).
+    pub const PAX_UNPARSED: i64 = 64;
 }
 
 /// Static description of the source being indexed, written into `meta`.
