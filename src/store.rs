@@ -90,6 +90,16 @@ pub fn capture_text(raw: &[u8]) -> (String, Option<Vec<u8>>) {
     }
 }
 
+/// The index's content mode (#39). Absent key (pre-#70 indexes) and any
+/// unrecognized future value read as Full — degrade open, never crash;
+/// full-mode gates are the permissive ones, so misreading a future mode
+/// as Full can only over-warn at query time, never hide data.
+pub fn content_mode(conn: &Connection) -> crate::indexer::ContentMode {
+    crate::searcher::get_meta(conn, "content_mode")
+        .and_then(|v| crate::indexer::ContentMode::parse(&v))
+        .unwrap_or(crate::indexer::ContentMode::Full)
+}
+
 /// Totals recorded into meta by [`finalize_v3`].
 #[derive(Debug, Default, Clone)]
 pub struct FinalizeCounts {
