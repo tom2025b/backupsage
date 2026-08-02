@@ -21,7 +21,7 @@ the v1.x contract breakable.
 
 | Surface | Current form | v1.x promise |
 |---|---|---|
-| JSON reports | `dedup --json` report `"version": 1`; `search --json`, `search --all --json`, `master list --json`, and `master verify --json` | Stable and additive-only. Existing keys retain their names, types, and meanings; `dedup` remains report version 1. |
+| JSON reports | `dedup --json` report `"version": 1`; `search --json`, `search --all --json`, `master list --json`, and `master verify --json` | Stable and additive-only. Existing keys retain their names, types, and meanings; `dedup` remains report version 1. v1.0.2 added the keeper-star fields (#9): `actionable`, `review_only_bytes`, `transitive_only_files`, `actionable_rule` — additive. In the same release `reclaimable_bytes`/`duplicate_files` stopped counting transitive-only members (a correctness fix to match their documented meaning: only members measured safe against the keeper are reclaimable). |
 | Exit codes | `0` clean, `1` error, `2` completed with skips; clap usage errors currently also use `2` | Stable meanings, including the documented usage-error caveat. |
 | Per-source index | SQLite schema version `3` | Stable within v1.x. v1.x continues to read schema-v3 indexes and the supported schema-v2 indexes, which remain `v2-limited` where metadata required by a command is absent. |
 | Master catalog | SQLite master catalog containing registered index metadata and replicas | Stable within v1.x. A catalog created by an earlier v1.x release remains readable by later v1.x releases; registration and query behavior preserve existing entries. |

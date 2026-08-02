@@ -124,6 +124,59 @@ fn full_flow_index_master_dedup_search() {
     assert!(text.contains("tar header"), "{text}");
 }
 
+/// Issue #9: transitive-only chain members are visibly review-only in the
+/// terminal rendering and non-actionable in the JSON twin.
+#[test]
+fn dedup_text_marks_transitive_members_review_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let master = dir.path().join("m.db");
+    let master_arg = master.to_str().unwrap();
+    let (a_png, b_png, c_png) = near_chain_pngs();
+    let a = write_archive(
+        dir.path(),
+        "alpha.tar",
+        &build_tar_mtime(
+            &[("photos/orig.png", a_png), ("photos/bright.png", b_png)],
+            1_600_000_000,
+        ),
+    );
+    let b = write_archive(
+        dir.path(),
+        "beta.tar",
+        &build_tar_mtime(&[("export/faded.png", c_png)], 1_700_000_000),
+    );
+    run_ok(&["index", a.to_str().unwrap(), b.to_str().unwrap()]);
+    run_ok(&[
+        "--master",
+        master_arg,
+        "master",
+        "add",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+
+    let out = run_ok(&["--master", master_arg, "dedup"]);
+    let text = stdout(&out);
+    assert!(text.contains("[review-only]"), "{text}");
+    assert!(
+        text.contains("review manually, never auto-deletable"),
+        "{text}"
+    );
+
+    // JSON twin agrees.
+    let out = run_ok(&["--master", master_arg, "dedup", "--json"]);
+    let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(report["summary"]["transitive_only_files"], 1, "{report}");
+    let faded = report["groups"][0]["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["path"] == "export/faded.png")
+        .unwrap();
+    assert_eq!(faded["actionable"], false);
+    assert_eq!(faded["keep"], false);
+}
+
 #[test]
 fn adhoc_dedup_without_master_and_exit_codes() {
     let dir = tempfile::tempdir().unwrap();

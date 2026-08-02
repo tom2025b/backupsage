@@ -84,6 +84,54 @@ pub fn png_bytes_brightened(seed: u32, w: u32, h: u32, delta: u8) -> Vec<u8> {
     png
 }
 
+/// Deterministic 3-image near-dup chain for keeper-safety tests (issue #9):
+/// returns (a, b, c) PNGs where a is 640×480 (forced keeper by resolution),
+/// hamming(pa, pb) and hamming(pb, pc) are within 3, and hamming(pa, pc) > 3
+/// — so c lands in the group only transitively. Search is bounded and
+/// deterministic; a miss is a loud panic, never a silent skip.
+pub fn near_chain_pngs() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use backupsage::phash;
+    let hash_of =
+        |png: &[u8]| phash::phash(&image::load_from_memory(png).expect("test png decodes"));
+    for seed in 0..64u32 {
+        let base = png_bytes(seed, 320, 240);
+        // Upscaled twin: same picture, highest resolution → forced keeper.
+        let big = {
+            let img = image::load_from_memory(&base).expect("test png decodes");
+            let up = img.resize_exact(640, 480, image::imageops::FilterType::Triangle);
+            let mut out = Vec::new();
+            up.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+                .expect("png encodes");
+            out
+        };
+        let pa = hash_of(&big);
+        if phash::hamming(pa, hash_of(&base)) > 1 {
+            continue; // upscale drifted too far to leave room for b
+        }
+        for delta_b in [24u8, 32, 40, 48, 56, 64, 80, 96] {
+            let b = png_bytes_brightened(seed, 320, 240, delta_b);
+            let pb = hash_of(&b);
+            if !(1..=3).contains(&phash::hamming(pa, pb)) {
+                continue;
+            }
+            for delta_c in [96u8, 112, 128, 144, 160, 176, 192, 208] {
+                if delta_c <= delta_b {
+                    continue;
+                }
+                let c = png_bytes_brightened(seed, 320, 240, delta_c);
+                let pc = hash_of(&c);
+                if (1..=3).contains(&phash::hamming(pb, pc)) && phash::hamming(pa, pc) > 3 {
+                    return (big, b, c);
+                }
+            }
+        }
+    }
+    panic!(
+        "near_chain_pngs: bounded search found no A-B-C chain — \
+         phash behavior changed; re-tune the search space deliberately"
+    );
+}
+
 /// Minimal little-endian TIFF carrying only an EXIF DateTimeOriginal —
 /// kamadak-exif reads it; the image crate cannot decode it (no pixels), so
 /// it also exercises the decode-failure degrade path.

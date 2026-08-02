@@ -62,7 +62,7 @@ dispositioned in [`docs/SECURITY.md`](SECURITY.md). Rationale is recorded in
 **Issues:**
 
 - [ ] Add a sparse-tar differential end-to-end corpus
-- [ ] Make near-duplicate groups keeper-safe
+- [x] Make near-duplicate groups keeper-safe (#9)
 - [ ] Add explicit content indexing modes
 - [ ] Close the v1 debt register and release-contract gaps
 

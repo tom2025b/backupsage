@@ -189,31 +189,21 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             .map(|(i, _)| i)
             .collect();
 
-        let pairs = mih_pairs(
-            &image_idxs
-                .iter()
-                .map(|&i| rows[i].phash.unwrap() as u64)
-                .collect::<Vec<_>>(),
+        let local_hashes: Vec<u64> = image_idxs
+            .iter()
+            .map(|&i| rows[i].phash.unwrap() as u64)
+            .collect();
+        for members in near_components(
+            &local_hashes,
             p.threshold,
             p.bucket_cap,
             &mut near_buckets_skipped,
-        );
-
-        let mut uf = UnionFind::new(image_idxs.len());
-        for &(a, b) in &pairs {
-            uf.union(a, b);
-        }
-        let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (local, &global) in image_idxs.iter().enumerate() {
-            clusters.entry(uf.find(local)).or_default().push(global);
-        }
-        for (_, members) in clusters {
-            if members.len() > 1 {
-                for &m in &members {
-                    in_near_group[m] = true;
-                }
-                groups_raw.push(("near".into(), members, 0)); // max_dist filled later
+        ) {
+            let globals: Vec<usize> = members.iter().map(|&l| image_idxs[l]).collect();
+            for &m in &globals {
+                in_near_group[m] = true;
             }
+            groups_raw.push(("near".into(), globals, 0)); // max_dist filled later
         }
     }
 
@@ -251,6 +241,8 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
     let mut duplicate_files = 0usize;
     let mut reclaimable_total = 0u64;
     let mut shadowed_bytes = 0u64;
+    let mut transitive_only_files = 0usize;
+    let mut review_only_total = 0u64;
 
     for (kind, mut member_idxs, _) in groups_raw {
         member_idxs.sort_by_key(|&i| (rows[i].archive_id, rows[i].file_id));
@@ -273,6 +265,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         let mut members = Vec::new();
         let mut max_dist = 0u32;
         let mut reclaimable = 0u64;
+        let mut review_only = 0u64;
         for &i in &member_idxs {
             let r = &rows[i];
             let hamming = match (keep_phash, r.phash) {
@@ -284,12 +277,27 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 max_dist = max_dist.max(d);
             }
             let is_keep = i == keep_i;
+            let actionable = member_is_actionable(
+                &kind,
+                is_keep,
+                r.shadowed(),
+                r.is_hardlink(),
+                hamming,
+                p.threshold,
+            );
             if !is_keep {
                 if r.shadowed() {
                     shadowed_bytes += r.size;
                 } else if !r.is_hardlink() {
-                    reclaimable += r.size;
-                    duplicate_files += 1;
+                    if actionable {
+                        reclaimable += r.size;
+                        duplicate_files += 1;
+                    } else {
+                        // Transitive-only: in the group through a chain of
+                        // matches, never measured safe against the keeper.
+                        review_only += r.size;
+                        transitive_only_files += 1;
+                    }
                 }
             }
             let (best_ts, ts_src) = r.best_ts();
@@ -316,6 +324,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 } else {
                     None
                 },
+                actionable,
                 shadowed: r.shadowed(),
                 sparse: r.sparse(),
                 hardlink_of: if r.is_hardlink() {
@@ -328,25 +337,43 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         // Keep first, then by archive/path for stable output.
         members.sort_by_key(|m| (!m.keep, m.archive_id, m.file_id));
         reclaimable_total += reclaimable;
+        review_only_total += review_only;
         groups.push(Group {
             group_id: 0, // assigned after sorting
             match_kind: kind,
             max_distance: max_dist,
             reclaimable_bytes: reclaimable,
+            review_only_bytes: review_only,
             members,
         });
     }
 
+    // Tie-break on the smallest (archive_id, file_id) in the group so equal
+    // primary keys never fall back to HashMap iteration order.
+    let first_key = |g: &Group| {
+        g.members
+            .iter()
+            .map(|m| (m.archive_id, m.file_id))
+            .min()
+            .unwrap_or((i64::MAX, i64::MAX))
+    };
     match p.sort {
-        SortKey::Wasted => groups.sort_by_key(|g| std::cmp::Reverse(g.reclaimable_bytes)),
-        SortKey::Count => groups.sort_by_key(|g| std::cmp::Reverse(g.members.len())),
+        SortKey::Wasted => {
+            groups.sort_by_key(|g| (std::cmp::Reverse(g.reclaimable_bytes), first_key(g)))
+        }
+        SortKey::Count => {
+            groups.sort_by_key(|g| (std::cmp::Reverse(g.members.len()), first_key(g)))
+        }
         SortKey::Newest => groups.sort_by_key(|g| {
-            std::cmp::Reverse(
-                g.members
-                    .iter()
-                    .find(|m| m.keep)
-                    .and_then(|m| m.best_ts_unix)
-                    .unwrap_or(i64::MIN),
+            (
+                std::cmp::Reverse(
+                    g.members
+                        .iter()
+                        .find(|m| m.keep)
+                        .and_then(|m| m.best_ts_unix)
+                        .unwrap_or(i64::MIN),
+                ),
+                first_key(g),
             )
         }),
     }
@@ -372,6 +399,8 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         groups: groups.len(),
         duplicate_files,
         reclaimable_bytes: reclaimable_total,
+        transitive_only_files,
+        review_only_bytes: review_only_total,
         archives_offline: registry
             .iter()
             .filter(|a| in_scope(a.archive_id) && a.status == STATUS_DB_MISSING)
@@ -410,6 +439,9 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             include_empty: p.include_empty,
             across_only: p.across_only,
             keep_policy: "exact:newest-then-clean-path; near:resolution-then-size-then-newest"
+                .into(),
+            actionable_rule: "near:direct-to-keeper-within-threshold; exact:always; \
+                              shadowed/hardlink:never"
                 .into(),
             images_grouped_perceptually: p.near,
         },
@@ -556,6 +588,33 @@ fn fetch_scope(master: &Master, p: &DedupParams, scope_ids: &[i64]) -> Result<Ve
 
 // ── Multi-index hashing ──────────────────────────────────────────────────────
 
+/// Connected components (size ≥ 2) of the verified within-threshold pair
+/// graph — the *review groups*. Component membership only proves a chain of
+/// pairwise matches; it never implies every member is within threshold of
+/// every other. Keeper-star classification happens later, per member.
+fn near_components(
+    hashes: &[u64],
+    threshold: u32,
+    cap: usize,
+    skipped: &mut u64,
+) -> Vec<Vec<usize>> {
+    let pairs = mih_pairs(hashes, threshold, cap, skipped);
+    let mut uf = UnionFind::new(hashes.len());
+    for &(a, b) in &pairs {
+        uf.union(a, b);
+    }
+    let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..hashes.len() {
+        clusters.entry(uf.find(i)).or_default().push(i);
+    }
+    let mut components: Vec<Vec<usize>> = clusters.into_values().filter(|c| c.len() > 1).collect();
+    for c in &mut components {
+        c.sort_unstable();
+    }
+    components.sort();
+    components
+}
+
 /// All pairs (by local index) within `threshold` hamming distance.
 /// Bucket iteration per 16-bit band; buckets over `cap` are skipped and
 /// counted — a warning surfaces in the report summary.
@@ -655,6 +714,32 @@ fn pick_keep(rows: &[Row], members: &[usize], kind: &str) -> Option<(usize, Stri
         }
     };
     Some((best, reason.to_string()))
+}
+
+/// The keeper-star rule (issue #9): a member is an *actionable* duplicate
+/// candidate only when its distance to the keeper was directly measured and
+/// is within the run's threshold. Members that are in the group only through
+/// a chain of pairwise matches (transitive-only) stay reviewable but must
+/// never be selected automatically. Keepers, shadowed rows and hardlinks are
+/// never actionable. Fails closed on anything unknown.
+fn member_is_actionable(
+    kind: &str,
+    is_keep: bool,
+    shadowed: bool,
+    hardlink: bool,
+    hamming_to_keep: Option<u32>,
+    threshold: u32,
+) -> bool {
+    if is_keep || shadowed || hardlink {
+        return false;
+    }
+    match kind {
+        // Exact members share a content hash with the keeper — identity, not
+        // an estimate; distance is 0 by definition.
+        "exact" => true,
+        "near" => matches!(hamming_to_keep, Some(d) if d <= threshold),
+        _ => false,
+    }
 }
 
 /// Paths that look like copy artifacts: `img (1).jpg`, `img_1.jpg`,
@@ -765,6 +850,101 @@ mod tests {
         }
     }
 
+    /// Issue #9 AC1: the full grouping pipeline (MIH candidates → union-find →
+    /// components) must match a brute-force pair oracle at every supported
+    /// threshold, and keeper-star classification must admit exactly the members
+    /// whose directly measured distance to the keeper is within threshold.
+    #[test]
+    fn grouping_matches_brute_force_oracle_at_every_threshold() {
+        // Deterministic corpus: random hashes plus planted CHAINS so the
+        // transitive-only case genuinely occurs (anti-vacuity, asserted below).
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rand = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut hashes: Vec<u64> = (0..1200).map(|_| rand()).collect();
+        // Planted chains A—B—C: d(A,B)=3, d(B,C)=3, disjoint bit sets so
+        // d(A,C)=6 — inside one component at threshold 3, far beyond it pairwise.
+        for i in 0..40 {
+            let a = hashes[i * 13];
+            let b = a ^ (0b111u64 << ((i * 5) % 60));
+            let c = b ^ (0b111u64 << (((i * 5) + 7) % 60));
+            hashes.push(b);
+            hashes.push(c);
+        }
+
+        for threshold in 0..=3u32 {
+            let mut skipped = 0u64;
+            let components = near_components(&hashes, threshold, DEFAULT_BUCKET_CAP, &mut skipped);
+            assert_eq!(skipped, 0, "oracle corpus must not hit the bucket cap");
+
+            // Brute-force oracle: union every pair within threshold, then
+            // compare the resulting components with the pipeline's.
+            let mut uf = UnionFind::new(hashes.len());
+            for a in 0..hashes.len() {
+                for b in (a + 1)..hashes.len() {
+                    if phash::hamming(hashes[a], hashes[b]) <= threshold {
+                        uf.union(a, b);
+                    }
+                }
+            }
+            let mut oracle_clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+            for i in 0..hashes.len() {
+                oracle_clusters.entry(uf.find(i)).or_default().push(i);
+            }
+            let mut oracle: Vec<Vec<usize>> = oracle_clusters
+                .into_values()
+                .filter(|c| c.len() > 1)
+                .collect();
+            for c in &mut oracle {
+                c.sort_unstable();
+            }
+            oracle.sort();
+            assert_eq!(
+                components, oracle,
+                "component mismatch at threshold {threshold}"
+            );
+
+            // Keeper-star: for EVERY possible keeper choice in every component,
+            // classification admits exactly the members measured within threshold.
+            let mut transitive_only_seen = false;
+            for comp in &components {
+                for &keeper in comp {
+                    for &m in comp {
+                        let d = phash::hamming(hashes[keeper], hashes[m]);
+                        let actionable = member_is_actionable(
+                            "near",
+                            m == keeper,
+                            false,
+                            false,
+                            Some(d),
+                            threshold,
+                        );
+                        assert_eq!(
+                            actionable,
+                            m != keeper && d <= threshold,
+                            "keeper-star violated: keeper {keeper}, member {m}, d {d}, t {threshold}"
+                        );
+                        if m != keeper && d > threshold {
+                            transitive_only_seen = true;
+                        }
+                    }
+                }
+            }
+            // Anti-vacuity: at threshold 3 the planted chains MUST produce
+            // transitive-only members, or this test is testing nothing.
+            if threshold == 3 {
+                assert!(
+                    transitive_only_seen,
+                    "corpus produced no transitive-only member"
+                );
+            }
+        }
+    }
+
     #[test]
     fn bucket_cap_skips_and_counts() {
         // 20 001 identical hashes: one bucket per band, all over a cap of 10.
@@ -782,6 +962,29 @@ mod tests {
         assert!(has_conflict_marker("a/img copy.jpg"));
         assert!(!has_conflict_marker("DCIM/IMG_0142.JPG")); // camera numbering: 4 digits
         assert!(!has_conflict_marker("2023/07/shot.jpg"));
+    }
+
+    #[test]
+    fn actionable_is_keeper_star_only() {
+        use super::member_is_actionable as act;
+        // near: directly measured within threshold → actionable
+        assert!(act("near", false, false, false, Some(0), 3));
+        assert!(act("near", false, false, false, Some(3), 3));
+        // near: transitive-only (beyond threshold) → review-only
+        assert!(!act("near", false, false, false, Some(4), 3));
+        // threshold is the run's threshold, not MAX: distance 2 at threshold 1 is NOT safe
+        assert!(!act("near", false, false, false, Some(2), 1));
+        // missing distance can never be actionable
+        assert!(!act("near", false, false, false, None, 3));
+        // exact groups are byte-identical — always actionable when eligible
+        assert!(act("exact", false, false, false, Some(0), 3));
+        assert!(act("exact", false, false, false, None, 0));
+        // keeper, shadowed and hardlink members are never actionable
+        assert!(!act("near", true, false, false, Some(0), 3));
+        assert!(!act("exact", false, true, false, Some(0), 3));
+        assert!(!act("exact", false, false, true, Some(0), 3));
+        // unknown kind fails closed
+        assert!(!act("weird", false, false, false, Some(0), 3));
     }
 
     #[test]

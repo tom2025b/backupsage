@@ -508,14 +508,20 @@ fn render_dedup_report(r: &DedupReport) -> String {
         } else {
             "exact".to_string()
         };
+        let review_desc = if g.review_only_bytes > 0 {
+            format!(" · {} review-only", human_bytes(g.review_only_bytes))
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "Group {}  {} · {} copies · {} archive(s) · {} reclaimable",
+            "Group {}  {} · {} copies · {} archive(s) · {} reclaimable{}",
             g.group_id,
             match_desc,
             g.members.len(),
             archives.len(),
             human_bytes(g.reclaimable_bytes),
+            review_desc,
         );
         let label_w = g
             .members
@@ -544,6 +550,11 @@ fn render_dedup_report(r: &DedupReport) -> String {
                 if !m.keep && d > 0 {
                     extras.push(format!("[dist {d}]"));
                 }
+            }
+            if !m.keep && !m.shadowed && m.hardlink_of.is_none() && !m.actionable {
+                // Transitive-only: grouped through a chain of matches, never
+                // measured within threshold of the keeper (issue #9).
+                extras.push("[review-only]".into());
             }
             if m.shadowed {
                 extras.push("[shadowed]".into());
@@ -600,6 +611,20 @@ fn render_dedup_report(r: &DedupReport) -> String {
             out,
             "warning: {} near-dup bucket(s) exceeded the cap and were skipped",
             s.near_buckets_skipped
+        );
+    }
+    if s.transitive_only_files > 0 {
+        let _ = writeln!(
+            out,
+            "{} near-duplicate member{} beyond threshold — review manually, \
+             never auto-deletable ({})",
+            s.transitive_only_files,
+            if s.transitive_only_files == 1 {
+                ""
+            } else {
+                "s"
+            },
+            human_bytes(s.review_only_bytes),
         );
     }
     for label in &s.archives_offline {

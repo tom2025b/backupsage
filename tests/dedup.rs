@@ -106,6 +106,10 @@ fn near_duplicate_images_group_perceptually() {
     let dup = g.members.iter().find(|m| !m.keep).unwrap();
     assert!(dup.hamming_to_keep.unwrap() <= 3);
     assert!(dup.width.is_some() && dup.height.is_some());
+    // Keeper-star (issue #9): the dup pair is directly measured within
+    // threshold → actionable; the keeper itself never is.
+    assert!(dup.actionable);
+    assert!(!keep.actionable);
 
     // With --exact-only the two different-byte images do not group at all.
     let exact_only = DedupParams {
@@ -114,6 +118,60 @@ fn near_duplicate_images_group_perceptually() {
     };
     let r2 = run_dedup(&m, &exact_only).unwrap();
     assert_eq!(r2.summary.groups, 0);
+}
+
+/// Issue #9 end-to-end: a transitive-only chain member is reported,
+/// reviewable, and excluded from every actionable count.
+#[test]
+fn transitive_chain_member_is_review_only_not_actionable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a_png, b_png, c_png) = near_chain_pngs();
+    // Two archives so the group is cross-archive like real corpora.
+    let db_a = index_archive(
+        dir.path(),
+        "alpha.tar",
+        &[("photos/orig.png", a_png), ("photos/bright.png", b_png)],
+    );
+    let db_b = index_archive(dir.path(), "beta.tar", &[("export/faded.png", c_png)]);
+    let m = master_of(dir.path(), &[&db_a, &db_b]);
+    let report = run_dedup(&m, &DedupParams::default()).unwrap();
+
+    assert_eq!(
+        report.summary.groups,
+        1,
+        "chain must form ONE review group: {}",
+        report.to_json()
+    );
+    let g = &report.groups[0];
+    assert_eq!(g.match_kind, "near");
+    assert_eq!(g.members.len(), 3, "{}", report.to_json());
+    let by_path: std::collections::HashMap<&str, &backupsage::report::Member> =
+        g.members.iter().map(|m| (m.path.as_str(), m)).collect();
+    let keeper = by_path["photos/orig.png"];
+    let direct = by_path["photos/bright.png"];
+    let transitive = by_path["export/faded.png"];
+
+    assert!(keeper.keep, "highest-resolution copy must be keeper");
+    assert!(!keeper.actionable, "keepers are never actionable");
+    assert!(!direct.keep);
+    assert!(direct.actionable, "directly measured member is actionable");
+    assert!(direct.hamming_to_keep.unwrap() <= 3);
+    assert!(!transitive.keep);
+    assert!(
+        !transitive.actionable,
+        "transitive-only member must never be actionable: {}",
+        report.to_json()
+    );
+    assert!(transitive.hamming_to_keep.unwrap() > 3);
+
+    // Honest accounting: the transitive member's bytes are review-only, and
+    // max_distance (keeper-relative) exposes the chain rather than hiding it.
+    assert_eq!(g.review_only_bytes, transitive.size);
+    assert_eq!(g.reclaimable_bytes, direct.size);
+    assert!(g.max_distance > 3);
+    assert_eq!(report.summary.transitive_only_files, 1);
+    assert_eq!(report.summary.review_only_bytes, transitive.size);
+    assert_eq!(report.summary.duplicate_files, 1);
 }
 
 #[test]
@@ -284,6 +342,40 @@ fn shadowed_rows_never_keep_and_report_their_bytes() {
     assert_eq!(report.summary.duplicate_files, 0);
 }
 
+/// Issue #9 rode along with a determinism fix: equal primary sort keys must
+/// tie-break on the smallest member identity, never HashMap iteration order.
+#[test]
+fn equal_reclaimable_groups_order_deterministically() {
+    let dir = tempfile::tempdir().unwrap();
+    let p1 = b"payload-one-equal-len!".to_vec();
+    let p2 = b"payload-two-equal-len!".to_vec();
+    assert_eq!(p1.len(), p2.len());
+    let db_a = index_archive(
+        dir.path(),
+        "t1.tar",
+        &[("a/x1.bin", p1.clone()), ("b/y1.bin", p2.clone())],
+    );
+    let db_b = index_archive(dir.path(), "t2.tar", &[("a/x2.bin", p1), ("b/y2.bin", p2)]);
+    let m = master_of(dir.path(), &[&db_a, &db_b]);
+    let r = run_dedup(&m, &DedupParams::default()).unwrap();
+
+    assert_eq!(r.summary.groups, 2);
+    assert_eq!(r.groups[0].reclaimable_bytes, r.groups[1].reclaimable_bytes);
+    let min0 = r.groups[0]
+        .members
+        .iter()
+        .map(|m| (m.archive_id, m.file_id))
+        .min()
+        .unwrap();
+    let min1 = r.groups[1]
+        .members
+        .iter()
+        .map(|m| (m.archive_id, m.file_id))
+        .min()
+        .unwrap();
+    assert!(min0 < min1, "tie must break on smallest member identity");
+}
+
 #[test]
 fn json_contract_field_names_are_stable() {
     let dir = tempfile::tempdir().unwrap();
@@ -304,10 +396,16 @@ fn json_contract_field_names_are_stable() {
         "match_kind",
         "max_distance",
         "reclaimable_bytes",
+        "review_only_bytes",
         "members",
     ] {
         assert!(group.get(key).is_some(), "missing group key {key}");
     }
+    // Keeper-star derivation rule is echoed into params (issue #9).
+    assert!(
+        v["params"].get("actionable_rule").is_some(),
+        "missing params key actionable_rule"
+    );
     let member = &group["members"][0];
     for key in [
         "archive_id",
@@ -327,6 +425,7 @@ fn json_contract_field_names_are_stable() {
         "hamming_to_keep",
         "keep",
         "keep_reason",
+        "actionable",
         "shadowed",
         "sparse",
         "hardlink_of",
@@ -342,6 +441,8 @@ fn json_contract_field_names_are_stable() {
         "groups",
         "duplicate_files",
         "reclaimable_bytes",
+        "transitive_only_files",
+        "review_only_bytes",
         "archives_offline",
         "archives_incomplete",
         "skipped_archives",

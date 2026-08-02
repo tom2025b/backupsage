@@ -1,0 +1,123 @@
+{
+  "archives": [
+    {
+      "archive_id": 1,
+      "label": "chain-alpha.tar",
+      "source": "<TMP>/chain-alpha.tar",
+      "source_type": "tar",
+      "status": "ok"
+    },
+    {
+      "archive_id": 2,
+      "label": "chain-beta.tar",
+      "source": "<TMP>/chain-beta.tar",
+      "source_type": "tar",
+      "status": "ok"
+    }
+  ],
+  "groups": [
+    {
+      "group_id": 1,
+      "match_kind": "near",
+      "max_distance": 4,
+      "members": [
+        {
+          "actionable": false,
+          "archive_id": 1,
+          "archive_label": "chain-alpha.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1600000000,
+          "content_hash": "b3:c68daa7769d476ba00e1e88e709ae67108c6bad2eb472aa9ffebfe70433bf553",
+          "exif_unix": null,
+          "file_id": 1,
+          "hamming_to_keep": 0,
+          "hardlink_of": null,
+          "height": 480,
+          "keep": true,
+          "keep_reason": "highest-resolution",
+          "kind": "image",
+          "mtime_unix": 1600000000,
+          "path": "photos/orig.png",
+          "phash": "e94ae84a1fb2b932",
+          "shadowed": false,
+          "size": 330112,
+          "sparse": false,
+          "width": 640
+        },
+        {
+          "actionable": true,
+          "archive_id": 1,
+          "archive_label": "chain-alpha.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1600000000,
+          "content_hash": "b3:d0156e4f0d4875cd15a290fcfdc103386b21b25ff59bd5601f7f8091b530dda2",
+          "exif_unix": null,
+          "file_id": 2,
+          "hamming_to_keep": 2,
+          "hardlink_of": null,
+          "height": 240,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "image",
+          "mtime_unix": 1600000000,
+          "path": "photos/bright.png",
+          "phash": "e94ae94a1fb29932",
+          "shadowed": false,
+          "size": 95289,
+          "sparse": false,
+          "width": 320
+        },
+        {
+          "actionable": false,
+          "archive_id": 2,
+          "archive_label": "chain-beta.tar",
+          "best_ts_source": "tar-mtime",
+          "best_ts_unix": 1700000000,
+          "content_hash": "b3:74a49dc074852f53804a87fa927bc670d79f156b9bb8a49afdbeee13c03284e9",
+          "exif_unix": null,
+          "file_id": 1,
+          "hamming_to_keep": 4,
+          "hardlink_of": null,
+          "height": 240,
+          "keep": false,
+          "keep_reason": null,
+          "kind": "image",
+          "mtime_unix": 1700000000,
+          "path": "export/faded.png",
+          "phash": "e94ae94a1fb39912",
+          "shadowed": false,
+          "size": 68367,
+          "sparse": false,
+          "width": 320
+        }
+      ],
+      "reclaimable_bytes": 95289,
+      "review_only_bytes": 68367
+    }
+  ],
+  "params": {
+    "across_only": false,
+    "actionable_rule": "near:direct-to-keeper-within-threshold; exact:always; shadowed/hardlink:never",
+    "exact": true,
+    "images_grouped_perceptually": true,
+    "include_empty": false,
+    "keep_policy": "exact:newest-then-clean-path; near:resolution-then-size-then-newest",
+    "min_size": 1,
+    "near": true,
+    "threshold": 3
+  },
+  "summary": {
+    "archives_incomplete": [],
+    "archives_offline": [],
+    "duplicate_files": 1,
+    "groups": 1,
+    "images_without_phash": 0,
+    "intra_archive_shadowed_bytes": 0,
+    "near_buckets_skipped": 0,
+    "reclaimable_bytes": 95289,
+    "review_only_bytes": 68367,
+    "skipped_archives": [],
+    "transitive_only_files": 1
+  },
+  "version": 1
+}
