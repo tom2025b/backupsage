@@ -128,17 +128,21 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
          PRAGMA cache_size=-65536;",
     )?;
 
-    // search-only (#39): contentless FTS5 — tokens are indexed at INSERT
-    // and the column values discarded, so no plaintext is recoverable from
-    // the index file. snippet()/highlight() become structurally
-    // unavailable; read paths gate on `content_mode` before using them.
+    // search-only (#39): external-content FTS5 over a view that exposes
+    // path from `files` and an always-empty content column — content
+    // tokens are indexed at INSERT time and never stored (no content
+    // shadow table exists), so no plaintext is recoverable from the index
+    // file, while path retrieval keeps working. snippet()/highlight()
+    // read the empty view column; read paths gate on `content_mode`
+    // instead of relying on that.
     if meta.mode == crate::indexer::ContentMode::SearchOnly {
         conn.execute_batch(
             "CREATE VIRTUAL TABLE files_fts USING fts5(
                 path,
                 content,
                 tokenize = 'unicode61',
-                content = ''
+                content = 'files_fts_ext',
+                content_rowid = 'id'
             );",
         )?;
     } else {
@@ -182,6 +186,13 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
         CREATE INDEX idx_files_hash ON files(content_hash) WHERE content_hash IS NOT NULL;
         CREATE INDEX idx_files_path ON files(path);",
     )?;
+    if meta.mode == crate::indexer::ContentMode::SearchOnly {
+        // The external-content source for files_fts (see above): path from
+        // the real row, content permanently empty.
+        conn.execute_batch(
+            "CREATE VIEW files_fts_ext AS SELECT id, path, '' AS content FROM files;",
+        )?;
+    }
 
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
