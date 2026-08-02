@@ -45,13 +45,19 @@ in CI. Giving these surfaces a version field is itself an additive change
 and may happen in a later release.
 
 Known residual gaps (fields the fixtures pin only at a degenerate value,
-so a *type* change to them would not be caught): `hardlink_of` and
-`sparse` are null/false on every corpus member (no hardlink or sparse tar
-entries yet — the sparse corpus is issue #8), and `archives_incomplete`
-appears only as an empty array. The element shape of
-`summary.skipped_archives` is additionally pinned by an inline assertion
-in `tests/cli.rs` (v2-limited flow). Field *renames and removals* of all
-of these are still caught — the keys themselves are in the fixtures.
+so a *type* change to them would not be caught): `hardlink_of` is null on
+every corpus member (no hardlink entries yet), and `archives_incomplete`
+appears only as an empty array. `sparse` stays pinned false in dedup
+output *by design* — sparse rows are excluded from dedup candidates at
+the SQL level — so its evidence lives elsewhere: the #64 differential
+corpus (`tests/fixtures/sparse/`, four GNU-tar-built dialect archives,
+frozen-as-observed) proves old-GNU logical size/bytes/BLAKE3 against GNU
+tar across tar/gz/zstd, pins the PAX name-only shape, and drives every
+malformed-map case to a loud abort in `tests/sparse.rs`. The element
+shape of `summary.skipped_archives` is additionally pinned by an inline
+assertion in `tests/cli.rs` (v2-limited flow). Field *renames and
+removals* of all of these are still caught — the keys themselves are in
+the fixtures.
 
 All other commands (`index`, `top`, `inspect`, `master add/sync/rm`)
 produce human-oriented text only — **unstable**, no machine-readable
