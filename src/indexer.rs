@@ -787,17 +787,26 @@ fn index_tar(
 
         if opts.mode == ContentMode::MetadataOnly {
             // Metadata-only (#39): content is never read — header facts
-            // only. The tar iterator skips unread member data on next().
+            // only; the tar iterator skips unread member data on next().
+            // PAX-sparse real names/logical sizes were already parsed from
+            // the headers above — use them, so the one mode whose entire
+            // product IS metadata records the real name, not the synthetic
+            // GNUSparseFile.<pid> wrapper path or the condensed size.
+            let (real_path, real_raw) = match &sparse_real_name {
+                Some(bytes) => store::capture_text(bytes),
+                None => (entry_path.clone(), path_raw.clone()),
+            };
+            let real_size = sparse_real_size.unwrap_or(size);
             let rec = EntryRecord {
-                path: &entry_path,
-                path_raw: path_raw.as_deref(),
+                path: &real_path,
+                path_raw: real_raw.as_deref(),
                 entry_type: "file",
                 link_target: None,
                 link_target_raw: None,
-                size,
+                size: real_size,
                 mtime_unix: mtime,
                 mode,
-                kind: metadata_kind(&entry_path, size),
+                kind: metadata_kind(&real_path, real_size),
                 content_hash: None,
                 img_w: None,
                 img_h: None,
@@ -808,6 +817,9 @@ fn index_tar(
                 fts_content: "",
             };
             run.record(&rec, None)?;
+            if pax_sparse {
+                run.summary.files_sparse_unsupported += 1;
+            }
             continue;
         }
 
