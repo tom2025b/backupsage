@@ -22,6 +22,8 @@ pub struct ReportParams {
     pub include_empty: bool,
     pub across_only: bool,
     pub keep_policy: String,
+    /// How `Member.actionable` is derived (issue #9, keeper-star rule).
+    pub actionable_rule: String,
     /// When near-dup runs, images with a pHash are grouped perceptually and
     /// excluded from exact groups (distance-0 pairs appear there instead).
     pub images_grouped_perceptually: bool,
@@ -44,6 +46,8 @@ pub struct Group {
     /// Largest hamming distance to the kept copy (0 for exact groups).
     pub max_distance: u32,
     pub reclaimable_bytes: u64,
+    /// Bytes held by transitive-only members — reviewable, not reclaimable.
+    pub review_only_bytes: u64,
     pub members: Vec<Member>,
 }
 
@@ -90,6 +94,10 @@ pub struct Summary {
     pub groups: usize,
     pub duplicate_files: usize,
     pub reclaimable_bytes: u64,
+    /// Near-dup members beyond the threshold relative to their keeper.
+    pub transitive_only_files: usize,
+    /// Bytes held by transitive-only members across all groups.
+    pub review_only_bytes: u64,
     /// Registered DBs that are unreachable — dedup used their replicas.
     pub archives_offline: Vec<String>,
     pub archives_incomplete: Vec<String>,

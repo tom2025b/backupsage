@@ -241,6 +241,8 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
     let mut duplicate_files = 0usize;
     let mut reclaimable_total = 0u64;
     let mut shadowed_bytes = 0u64;
+    let mut transitive_only_files = 0usize;
+    let mut review_only_total = 0u64;
 
     for (kind, mut member_idxs, _) in groups_raw {
         member_idxs.sort_by_key(|&i| (rows[i].archive_id, rows[i].file_id));
@@ -263,6 +265,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         let mut members = Vec::new();
         let mut max_dist = 0u32;
         let mut reclaimable = 0u64;
+        let mut review_only = 0u64;
         for &i in &member_idxs {
             let r = &rows[i];
             let hamming = match (keep_phash, r.phash) {
@@ -274,12 +277,27 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 max_dist = max_dist.max(d);
             }
             let is_keep = i == keep_i;
+            let actionable = member_is_actionable(
+                &kind,
+                is_keep,
+                r.shadowed(),
+                r.is_hardlink(),
+                hamming,
+                p.threshold,
+            );
             if !is_keep {
                 if r.shadowed() {
                     shadowed_bytes += r.size;
                 } else if !r.is_hardlink() {
-                    reclaimable += r.size;
-                    duplicate_files += 1;
+                    if actionable {
+                        reclaimable += r.size;
+                        duplicate_files += 1;
+                    } else {
+                        // Transitive-only: in the group through a chain of
+                        // matches, never measured safe against the keeper.
+                        review_only += r.size;
+                        transitive_only_files += 1;
+                    }
                 }
             }
             let (best_ts, ts_src) = r.best_ts();
@@ -306,6 +324,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 } else {
                     None
                 },
+                actionable,
                 shadowed: r.shadowed(),
                 sparse: r.sparse(),
                 hardlink_of: if r.is_hardlink() {
@@ -318,25 +337,43 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         // Keep first, then by archive/path for stable output.
         members.sort_by_key(|m| (!m.keep, m.archive_id, m.file_id));
         reclaimable_total += reclaimable;
+        review_only_total += review_only;
         groups.push(Group {
             group_id: 0, // assigned after sorting
             match_kind: kind,
             max_distance: max_dist,
             reclaimable_bytes: reclaimable,
+            review_only_bytes: review_only,
             members,
         });
     }
 
+    // Tie-break on the smallest (archive_id, file_id) in the group so equal
+    // primary keys never fall back to HashMap iteration order.
+    let first_key = |g: &Group| {
+        g.members
+            .iter()
+            .map(|m| (m.archive_id, m.file_id))
+            .min()
+            .unwrap_or((i64::MAX, i64::MAX))
+    };
     match p.sort {
-        SortKey::Wasted => groups.sort_by_key(|g| std::cmp::Reverse(g.reclaimable_bytes)),
-        SortKey::Count => groups.sort_by_key(|g| std::cmp::Reverse(g.members.len())),
+        SortKey::Wasted => {
+            groups.sort_by_key(|g| (std::cmp::Reverse(g.reclaimable_bytes), first_key(g)))
+        }
+        SortKey::Count => {
+            groups.sort_by_key(|g| (std::cmp::Reverse(g.members.len()), first_key(g)))
+        }
         SortKey::Newest => groups.sort_by_key(|g| {
-            std::cmp::Reverse(
-                g.members
-                    .iter()
-                    .find(|m| m.keep)
-                    .and_then(|m| m.best_ts_unix)
-                    .unwrap_or(i64::MIN),
+            (
+                std::cmp::Reverse(
+                    g.members
+                        .iter()
+                        .find(|m| m.keep)
+                        .and_then(|m| m.best_ts_unix)
+                        .unwrap_or(i64::MIN),
+                ),
+                first_key(g),
             )
         }),
     }
@@ -362,6 +399,8 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
         groups: groups.len(),
         duplicate_files,
         reclaimable_bytes: reclaimable_total,
+        transitive_only_files,
+        review_only_bytes: review_only_total,
         archives_offline: registry
             .iter()
             .filter(|a| in_scope(a.archive_id) && a.status == STATUS_DB_MISSING)
@@ -400,6 +439,9 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             include_empty: p.include_empty,
             across_only: p.across_only,
             keep_policy: "exact:newest-then-clean-path; near:resolution-then-size-then-newest"
+                .into(),
+            actionable_rule: "near:direct-to-keeper-within-threshold; exact:always; \
+                              shadowed/hardlink:never"
                 .into(),
             images_grouped_perceptually: p.near,
         },
