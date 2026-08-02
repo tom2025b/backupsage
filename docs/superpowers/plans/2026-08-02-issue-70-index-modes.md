@@ -303,4 +303,4 @@ fn old_index_without_mode_key_reads_as_full() {
 - Placeholder scan: T4/T5 Step-1 tests carry bracketed CLI-assertion sketches pointing at tests/cli.rs's exact helper trio to copy — deliberate, the helpers are 15 lines in that file.
 - Type consistency: `ContentMode` names identical across tasks; `SearchHit.matches: Option<usize>` change named in T4 where it happens.
 
-**Signed:** thomas2025 · 2026-08-02T05:35:00-04:00
+**Signed:** thomas2025 · 2026-08-02T06:01:37-04:00
