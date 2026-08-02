@@ -129,6 +129,34 @@ fn metadata_only_never_reads_content() {
     assert_eq!(summary.files_hashed, 0);
 }
 
+#[test]
+fn old_index_without_mode_key_reads_as_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_s, conn) = index_with_mode(
+        dir.path(),
+        "old.tar",
+        &[("a.txt", b"grandfather word".to_vec())],
+        ContentMode::Full,
+    );
+    drop(conn);
+    let db = dir.path().join("old.tar.db");
+    // Simulate a pre-#70 index: the key simply doesn't exist. The file is
+    // a test fixture this test just built — not a real user index.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key='content_mode'", [])
+        .unwrap();
+    assert_eq!(
+        backupsage::store::content_mode(&conn),
+        ContentMode::Full,
+        "absent content_mode key must grandfather to full"
+    );
+    drop(conn);
+    // And search still works end-to-end through the CLI.
+    let out = run(&["search", "grandfather", "-i", db.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("a.txt"), "{}", stdout(&out));
+}
+
 // ── CLI-level read-time gates ───────────────────────────────────────────────
 
 fn bin() -> std::process::Command {

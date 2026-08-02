@@ -123,6 +123,8 @@ pub struct IndexSummary {
     pub images_phashed: u64,
     /// Images without one (HEIC/RAW/over-cap/decode-failed).
     pub images_no_phash: u64,
+    /// Content mode this index was built with (#39).
+    pub mode: String,
     /// PAX-sparse entries (0.0/0.1/1.0) — unsupported by tar-rs, indexed
     /// name-only so misread condensed bytes never reach hash or FTS.
     pub files_sparse_unsupported: u64,
