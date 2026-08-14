@@ -178,8 +178,19 @@ with its source field, and flags (truncated / sparse / shadowed / …).
 - **Index size**: the FTS index stores a full copy of all indexed *text*
   (that's what makes snippets work) — expect roughly the size of the text
   content. Media contribute only ~150 bytes of metadata per file. The
-  security note stands: the `.db` contains plaintext from your backup —
-  protect it like the backup itself.
+  security note stands: a `--mode full` (default) `.db` contains plaintext
+  from your backup — protect it like the backup itself.
+- **Content modes and what they leak** (`--mode full|search-only|metadata-only`,
+  #39/#70/#71): `search-only` drops the recoverable-plaintext copy (SQLite
+  FTS5 `contentless` storage) but still stores every distinct token and its
+  frequency — that is what makes it searchable at all. **This is not
+  encryption and not a privacy boundary**: word lists and frequencies can
+  leak real information about the source text. `metadata-only` stores no
+  content-derived data whatsoever — no hashes, no tokens, no snippets, no
+  dedup — only filesystem-level facts (path, size, mtime, kind). Treat
+  `search-only` indexes with the same care as `full` ones; only
+  `metadata-only` indexes are safe to handle more casually than the backup
+  they describe.
 - **Speed**: indexing is typically decompression-bound; BLAKE3 hashing adds
   multi-GB/s SIMD work, not I/O. Compressed archives already had to
   decompress every byte anyway.
