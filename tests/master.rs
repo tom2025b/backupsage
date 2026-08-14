@@ -233,3 +233,120 @@ fn in_memory_master_for_adhoc_dedup() {
         .unwrap();
     assert_eq!(total, 2);
 }
+
+#[test]
+fn add_replicates_content_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = index_archive(dir.path(), "plain.tar", &[("a.txt", b"hi".to_vec())]);
+    let mut m = open_master(dir.path());
+    m.add(&db).unwrap();
+    assert_eq!(m.list().unwrap()[0].content_mode, "full");
+}
+
+#[test]
+fn search_only_and_metadata_only_content_mode_replicate() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, mode, expect) in [
+        ("so.tar", indexer::ContentMode::SearchOnly, "search-only"),
+        ("mo.tar", indexer::ContentMode::MetadataOnly, "metadata-only"),
+    ] {
+        let archive = write_archive(dir.path(), name, &build_tar(&[("f.txt", b"x".to_vec())]));
+        let opts = IndexOptions {
+            mode,
+            ..IndexOptions::default()
+        };
+        let db = indexer::run_index(&archive, None, &opts).unwrap().db_path;
+        let mut m = open_master(dir.path());
+        m.add(&db).unwrap();
+        let row = m
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.label == name)
+            .unwrap();
+        assert_eq!(row.content_mode, expect);
+    }
+}
+
+/// Migration precedent: a pre-#39 v3 index (no `content_mode` meta key at
+/// all — the state of every index built before #70) must grandfather to
+/// `full` all the way through master replication, exactly as
+/// `store::content_mode` already grandfathers it on direct reads
+/// (`tests/modes.rs::old_index_without_mode_key_reads_as_full`).
+#[test]
+fn pre_70_index_without_content_mode_key_replicates_as_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = index_archive(dir.path(), "old.tar", &[("a.txt", b"grandfather".to_vec())]);
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute("DELETE FROM meta WHERE key='content_mode'", [])
+            .unwrap();
+    }
+    let mut m = open_master(dir.path());
+    m.add(&db).unwrap();
+    assert_eq!(m.list().unwrap()[0].content_mode, "full");
+}
+
+/// A master catalog file created before this change (no `content_mode`
+/// column at all) must migrate on open, same probe-then-ALTER shape as
+/// `path_raw` (#37/ADR 0002) — never refuse to open an old master.
+#[test]
+fn legacy_master_without_content_mode_column_migrates_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let master_path = dir.path().join("master.db");
+    {
+        // Fabricate a pre-#71 master: signed, but archives lacks the column.
+        let conn = rusqlite::Connection::open(&master_path).unwrap();
+        conn.pragma_update(None, "application_id", master::MASTER_APPLICATION_ID)
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE archives (
+                archive_id     INTEGER PRIMARY KEY,
+                index_uuid     TEXT UNIQUE NOT NULL,
+                db_path        TEXT NOT NULL,
+                source_path    TEXT NOT NULL,
+                source_type    TEXT NOT NULL,
+                label          TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                files_count    INTEGER NOT NULL DEFAULT 0,
+                completed      INTEGER NOT NULL DEFAULT 0,
+                indexed_unix   INTEGER,
+                archive_size   INTEGER,
+                archive_mtime_unix INTEGER,
+                archive_blake3 TEXT,
+                db_size        INTEGER,
+                db_mtime_unix  INTEGER,
+                phash_algo     TEXT,
+                status         TEXT NOT NULL DEFAULT 'ok',
+                added_unix     INTEGER NOT NULL,
+                synced_unix    INTEGER
+            );
+            CREATE TABLE files (
+                archive_id   INTEGER NOT NULL,
+                file_id      INTEGER NOT NULL,
+                path         TEXT NOT NULL,
+                entry_type   TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                size         INTEGER,
+                mtime_unix   INTEGER,
+                exif_unix    INTEGER,
+                exif_src     TEXT,
+                content_hash BLOB,
+                phash        INTEGER,
+                img_w        INTEGER,
+                img_h        INTEGER,
+                flags        INTEGER NOT NULL DEFAULT 0,
+                pb0 INTEGER GENERATED ALWAYS AS ((phash >> 48) & 0xFFFF) VIRTUAL,
+                pb1 INTEGER GENERATED ALWAYS AS ((phash >> 32) & 0xFFFF) VIRTUAL,
+                pb2 INTEGER GENERATED ALWAYS AS ((phash >> 16) & 0xFFFF) VIRTUAL,
+                pb3 INTEGER GENERATED ALWAYS AS ( phash        & 0xFFFF) VIRTUAL,
+                PRIMARY KEY (archive_id, file_id)
+            );",
+        )
+        .unwrap();
+    }
+    let db = index_archive(dir.path(), "new.tar", &[("a.txt", b"data".to_vec())]);
+    let mut m = master::open_at(&master_path).unwrap();
+    m.add(&db).unwrap();
+    assert_eq!(m.list().unwrap()[0].content_mode, "full");
+}

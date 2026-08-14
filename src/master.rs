@@ -40,6 +40,7 @@ pub struct ArchiveRow {
     pub indexed_unix: Option<i64>,
     pub archive_blake3: Option<String>,
     pub status: String,
+    pub content_mode: String,
 }
 
 #[derive(Debug)]
@@ -193,6 +194,11 @@ pub fn open_at(path: &Path) -> Result<Master> {
             if !crate::searcher::has_column(&conn, "files", "path_raw") {
                 conn.execute_batch("ALTER TABLE files ADD COLUMN path_raw BLOB")?;
             }
+            if !crate::searcher::has_column(&conn, "archives", "content_mode") {
+                conn.execute_batch(
+                    "ALTER TABLE archives ADD COLUMN content_mode TEXT NOT NULL DEFAULT 'full'",
+                )?;
+            }
             Ok(Master { conn })
         }
         MasterProbe::PerSourceIndex => bail!(
@@ -249,6 +255,7 @@ fn init_master_conn(conn: &Connection) -> Result<()> {
             db_size        INTEGER,
             db_mtime_unix  INTEGER,
             phash_algo     TEXT,
+            content_mode   TEXT NOT NULL DEFAULT 'full',
             status         TEXT NOT NULL DEFAULT 'ok',
             added_unix     INTEGER NOT NULL,
             synced_unix    INTEGER
@@ -305,6 +312,7 @@ struct SourceIdentity {
     archive_mtime_unix: Option<i64>,
     archive_blake3: Option<String>,
     phash_algo: Option<String>,
+    content_mode: crate::indexer::ContentMode,
 }
 
 fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
@@ -341,6 +349,7 @@ fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
             .and_then(|v| v.parse().ok()),
         archive_blake3: searcher::get_meta(&conn, "archive_blake3"),
         phash_algo: searcher::get_meta(&conn, "phash_algo"),
+        content_mode: store::content_mode(&conn),
     };
     Ok((conn, id))
 }
@@ -414,8 +423,8 @@ impl Master {
                         source_type=?4, label=?5, schema_version=?6, completed=?7,
                         indexed_unix=?8, archive_size=?9, archive_mtime_unix=?10,
                         archive_blake3=?11, db_size=?12, db_mtime_unix=?13,
-                        phash_algo=?14, status=?15, synced_unix=?16
-                     WHERE archive_id=?17",
+                        phash_algo=?14, content_mode=?15, status=?16, synced_unix=?17
+                     WHERE archive_id=?18",
                     params![
                         id.index_uuid,
                         db_abs,
@@ -431,6 +440,7 @@ impl Master {
                         db_size,
                         db_mtime,
                         id.phash_algo,
+                        id.content_mode.as_str(),
                         status,
                         now_unix(),
                         aid
@@ -443,8 +453,8 @@ impl Master {
                     "INSERT INTO archives (index_uuid, db_path, source_path, source_type,
                         label, schema_version, completed, indexed_unix, archive_size,
                         archive_mtime_unix, archive_blake3, db_size, db_mtime_unix,
-                        phash_algo, status, added_unix, synced_unix)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)",
+                        phash_algo, content_mode, status, added_unix, synced_unix)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17)",
                     params![
                         id.index_uuid,
                         db_abs,
@@ -460,6 +470,7 @@ impl Master {
                         db_size,
                         db_mtime,
                         id.phash_algo,
+                        id.content_mode.as_str(),
                         status,
                         now_unix()
                     ],
@@ -540,7 +551,8 @@ impl Master {
     pub fn list(&self) -> Result<Vec<ArchiveRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT archive_id, index_uuid, db_path, source_path, source_type, label,
-                    schema_version, files_count, completed, indexed_unix, archive_blake3, status
+                    schema_version, files_count, completed, indexed_unix, archive_blake3, status,
+                    content_mode
              FROM archives ORDER BY archive_id",
         )?;
         let rows = stmt
@@ -558,6 +570,7 @@ impl Master {
                     indexed_unix: r.get(9)?,
                     archive_blake3: r.get(10)?,
                     status: r.get(11)?,
+                    content_mode: r.get(12)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
