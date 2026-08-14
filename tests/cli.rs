@@ -319,3 +319,80 @@ fn master_list_json_carries_content_mode() {
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(v[0]["content_mode"], "search-only");
 }
+
+#[test]
+fn search_all_json_carries_per_archive_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let master = dir.path().join("m.db");
+    let a = write_archive(
+        dir.path(),
+        "full.tar",
+        &build_tar(&[("a.txt", b"findableword here".to_vec())]),
+    );
+    let b = write_archive(
+        dir.path(),
+        "so.tar",
+        &build_tar(&[("b.txt", b"findableword too".to_vec())]),
+    );
+    run_ok(&["index", a.to_str().unwrap()]);
+    run_ok(&["index", b.to_str().unwrap(), "--mode", "search-only"]);
+    run_ok(&[
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "add",
+        dir.path().join("full.tar.db").to_str().unwrap(),
+        dir.path().join("so.tar.db").to_str().unwrap(),
+    ]);
+    let out = run_ok(&[
+        "--master",
+        master.to_str().unwrap(),
+        "search",
+        "findableword",
+        "--all",
+        "--json",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let archives = v["archives"].as_array().unwrap();
+    let modes: std::collections::BTreeSet<&str> = archives
+        .iter()
+        .map(|a| a["mode"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        modes,
+        std::collections::BTreeSet::from(["full", "search-only"])
+    );
+}
+
+#[test]
+fn search_all_snippets_notes_search_only_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    let master = dir.path().join("m.db");
+    let b = write_archive(
+        dir.path(),
+        "so2.tar",
+        &build_tar(&[("b.txt", b"snippetword content".to_vec())]),
+    );
+    run_ok(&["index", b.to_str().unwrap(), "--mode", "search-only"]);
+    run_ok(&[
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "add",
+        dir.path().join("so2.tar.db").to_str().unwrap(),
+    ]);
+    let out = bin()
+        .args([
+            "--master",
+            master.to_str().unwrap(),
+            "search",
+            "snippetword",
+            "--all",
+            "--snippets",
+        ])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("search-only"), "{err}");
+    assert!(err.contains("so2.tar"), "{err}");
+}

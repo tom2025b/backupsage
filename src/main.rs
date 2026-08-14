@@ -69,6 +69,16 @@ fn run() -> Result<i32> {
         Commands::Search(args) if args.all => {
             let m = open_master_checked(&master_path)?;
             let outcome = searcher::search_all(&m, &args.keyword, args.limit, args.snippets)?;
+            if args.snippets {
+                for fed in &outcome.per_archive {
+                    if fed.content_mode == "search-only" {
+                        eprintln!(
+                            "note: '{}' is search-only — snippets are unavailable (no stored text)",
+                            sanitize(&fed.archive_label)
+                        );
+                    }
+                }
+            }
             if args.json {
                 println!("{}", search_all_json(&outcome));
             } else {
@@ -752,6 +762,7 @@ fn search_all_json(outcome: &searcher::FederatedOutcome) -> String {
             serde_json::json!({
                 "archive": f.archive_label,
                 "truncated": f.truncated,
+                "mode": f.content_mode,
                 "hits": f.hits.iter().map(hit_json).collect::<Vec<_>>(),
             })
         })
