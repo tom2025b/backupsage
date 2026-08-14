@@ -351,10 +351,7 @@ fn dedup_metadata_only_skip_matches_fixture() {
     let full = write_archive(
         tmp,
         "mo-full.tar",
-        &build_tar(&[
-            ("keep/one.bin", dup.clone()),
-            ("keep/two.bin", dup),
-        ]),
+        &build_tar(&[("keep/one.bin", dup.clone()), ("keep/two.bin", dup)]),
     );
     let metadata_only = write_archive(
         tmp,
@@ -385,7 +382,10 @@ fn dedup_metadata_only_skip_matches_fixture() {
     let out = run(&["--master", m, "dedup", "--json"]);
     assert_eq!(code(&out), 2, "metadata-only archive must force exit 2");
     let report = normalized(&stdout(&out), tmp);
-    assert_eq!(report["summary"]["groups"], 1, "the full-mode pair still dedups: {report}");
+    assert_eq!(
+        report["summary"]["groups"], 1,
+        "the full-mode pair still dedups: {report}"
+    );
     assert_eq!(
         report["summary"]["skipped_archives"][0][0], "mo-only.tar",
         "{report}"

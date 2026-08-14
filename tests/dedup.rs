@@ -477,13 +477,18 @@ fn metadata_only_archive_is_a_counted_skip_not_a_silent_empty_report() {
     let mut m = backupsage::master::open_at(&dir.path().join("m.db")).unwrap();
     m.add(&db).unwrap();
 
-    let report = backupsage::dedup::run_dedup(&m, &backupsage::dedup::DedupParams::default())
-        .unwrap();
-    assert!(report.has_skips(), "metadata-only archive must count as a skip");
+    let report =
+        backupsage::dedup::run_dedup(&m, &backupsage::dedup::DedupParams::default()).unwrap();
+    assert!(
+        report.has_skips(),
+        "metadata-only archive must count as a skip"
+    );
     assert_eq!(report.summary.skipped_archives.len(), 1);
     assert_eq!(report.summary.skipped_archives[0].0, "mo.tar");
     assert!(
-        report.summary.skipped_archives[0].1.contains("metadata-only"),
+        report.summary.skipped_archives[0]
+            .1
+            .contains("metadata-only"),
         "{}",
         report.summary.skipped_archives[0].1
     );

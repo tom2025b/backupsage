@@ -248,7 +248,11 @@ fn search_only_and_metadata_only_content_mode_replicate() {
     let dir = tempfile::tempdir().unwrap();
     for (name, mode, expect) in [
         ("so.tar", indexer::ContentMode::SearchOnly, "search-only"),
-        ("mo.tar", indexer::ContentMode::MetadataOnly, "metadata-only"),
+        (
+            "mo.tar",
+            indexer::ContentMode::MetadataOnly,
+            "metadata-only",
+        ),
     ] {
         let archive = write_archive(dir.path(), name, &build_tar(&[("f.txt", b"x".to_vec())]));
         let opts = IndexOptions {

@@ -315,7 +315,13 @@ fn master_list_json_carries_content_mode() {
         "add",
         dir.path().join("modeit.tar.db").to_str().unwrap(),
     ]);
-    let out = run_ok(&["--master", master.to_str().unwrap(), "master", "list", "--json"]);
+    let out = run_ok(&[
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "list",
+        "--json",
+    ]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(v[0]["content_mode"], "search-only");
 }
