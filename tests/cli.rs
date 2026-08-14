@@ -297,3 +297,25 @@ fn dir_index_via_cli_and_v2_limited_flow() {
     assert_eq!(out.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&out.stdout).contains("old/file.txt"));
 }
+
+#[test]
+fn master_list_json_carries_content_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let master = dir.path().join("m.db");
+    let src = write_archive(
+        dir.path(),
+        "modeit.tar",
+        &build_tar(&[("a.txt", b"data".to_vec())]),
+    );
+    run_ok(&["index", src.to_str().unwrap(), "--mode", "search-only"]);
+    run_ok(&[
+        "--master",
+        master.to_str().unwrap(),
+        "master",
+        "add",
+        dir.path().join("modeit.tar.db").to_str().unwrap(),
+    ]);
+    let out = run_ok(&["--master", master.to_str().unwrap(), "master", "list", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v[0]["content_mode"], "search-only");
+}
