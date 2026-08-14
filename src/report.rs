@@ -36,6 +36,7 @@ pub struct ReportArchive {
     pub source: String,
     pub source_type: String,
     pub status: String,
+    pub content_mode: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -453,3 +453,39 @@ fn json_contract_field_names_are_stable() {
         assert!(v["summary"].get(key).is_some(), "missing summary key {key}");
     }
 }
+
+/// #71: before this fix, a metadata-only archive (no content_hash on any
+/// row) simply vanished from `fetch_scope`'s `WHERE content_hash IS NOT
+/// NULL` filter — dedup reported zero groups, exit 0, no explanation. It
+/// must now land in `summary.skipped_archives` with a worded reason and
+/// force exit 2, the same shape v2-limited archives already use.
+#[test]
+fn metadata_only_archive_is_a_counted_skip_not_a_silent_empty_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive = write_archive(
+        dir.path(),
+        "mo.tar",
+        &build_tar(&[("secret.txt", b"never hashed".to_vec())]),
+    );
+    let opts = backupsage::indexer::IndexOptions {
+        mode: backupsage::indexer::ContentMode::MetadataOnly,
+        ..backupsage::indexer::IndexOptions::default()
+    };
+    let db = backupsage::indexer::run_index(&archive, None, &opts)
+        .unwrap()
+        .db_path;
+    let mut m = backupsage::master::open_at(&dir.path().join("m.db")).unwrap();
+    m.add(&db).unwrap();
+
+    let report = backupsage::dedup::run_dedup(&m, &backupsage::dedup::DedupParams::default())
+        .unwrap();
+    assert!(report.has_skips(), "metadata-only archive must count as a skip");
+    assert_eq!(report.summary.skipped_archives.len(), 1);
+    assert_eq!(report.summary.skipped_archives[0].0, "mo.tar");
+    assert!(
+        report.summary.skipped_archives[0].1.contains("metadata-only"),
+        "{}",
+        report.summary.skipped_archives[0].1
+    );
+    assert_eq!(report.archives[0].content_mode, "metadata-only");
+}
