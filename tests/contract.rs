@@ -4,8 +4,9 @@
 //! The five JSON surfaces: `dedup --json`, `search --json`,
 //! `search --all --json`, `master list --json`, `master verify --json` —
 //! plus completed-with-skips variants of the two that have one, plus the
-//! keeper-star chain corpus (#9) pinned in `dedup_chain.json` (eight
-//! fixtures total).
+//! keeper-star chain corpus (#9) pinned in `dedup_chain.json`, plus #71's
+//! non-degenerate content-mode corpora (`search_only.json`,
+//! `metadata_only_skips.json`) — ten fixtures total.
 //! Run-varying fields (temp paths, `indexed_unix`) are normalized before
 //! comparison; everything else in the corpus is deterministic by
 //! construction (fixed mtimes, seeded PNG bytes, fixed payloads).
@@ -291,13 +292,112 @@ fn json_surfaces_match_golden_fixtures() {
                 "dedup_skips.json",
                 "master_list.json",
                 "master_verify.json",
+                "metadata_only_skips.json",
                 "search.json",
                 "search_all.json",
                 "search_all_skips.json",
+                "search_only.json",
             ],
             "unexpected fixture set — remove orphans or update this list"
         );
     }
+}
+
+/// #71: `search --all --json`'s per-archive `mode` field pinned at a real
+/// non-default value (`search-only`), not just `full` — ADR 0003's
+/// residual-gaps rule: a field frozen only at its default is not really
+/// pinned.
+#[test]
+fn search_all_search_only_mode_matches_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let archive = write_archive(
+        tmp,
+        "so-contract.tar",
+        &build_tar(&[("doc.txt", b"contractword body text".to_vec())]),
+    );
+    let out = run(&["index", archive.to_str().unwrap(), "--mode", "search-only"]);
+    assert_eq!(code(&out), 0, "index failed: {}", stdout(&out));
+    let master = tmp.join("so-master.db");
+    let m = master.to_str().unwrap();
+    let out = run(&[
+        "--master",
+        m,
+        "master",
+        "add",
+        archive.with_extension("tar.db").to_str().unwrap(),
+    ]);
+    assert_eq!(code(&out), 0, "master add failed");
+
+    let out = run(&["--master", m, "search", "contractword", "--all", "--json"]);
+    assert_eq!(code(&out), 0);
+    let report = normalized(&stdout(&out), tmp);
+    assert_eq!(
+        report["archives"][0]["mode"], "search-only",
+        "fixture must pin a non-degenerate mode value: {report}"
+    );
+    assert_matches_fixture("search_only.json", report);
+}
+
+/// #71: `dedup --json` with a metadata-only archive present alongside a
+/// normal duplicate pair — pins `summary.skipped_archives`' worded reason
+/// and `archives[].content_mode` at real non-`full` values, and freezes
+/// the exit-2 behavior of the previously-silent-empty gap.
+#[test]
+fn dedup_metadata_only_skip_matches_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let dup = b"metadata-fixture duplicate payload\n".to_vec();
+    let full = write_archive(
+        tmp,
+        "mo-full.tar",
+        &build_tar(&[
+            ("keep/one.bin", dup.clone()),
+            ("keep/two.bin", dup),
+        ]),
+    );
+    let metadata_only = write_archive(
+        tmp,
+        "mo-only.tar",
+        &build_tar(&[("secret/three.bin", b"never hashed content".to_vec())]),
+    );
+    let out = run(&["index", full.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "index failed: {}", stdout(&out));
+    let out = run(&[
+        "index",
+        metadata_only.to_str().unwrap(),
+        "--mode",
+        "metadata-only",
+    ]);
+    assert_eq!(code(&out), 0, "index failed: {}", stdout(&out));
+    let master = tmp.join("mo-master.db");
+    let m = master.to_str().unwrap();
+    let out = run(&[
+        "--master",
+        m,
+        "master",
+        "add",
+        full.with_extension("tar.db").to_str().unwrap(),
+        metadata_only.with_extension("tar.db").to_str().unwrap(),
+    ]);
+    assert_eq!(code(&out), 0, "master add failed");
+
+    let out = run(&["--master", m, "dedup", "--json"]);
+    assert_eq!(code(&out), 2, "metadata-only archive must force exit 2");
+    let report = normalized(&stdout(&out), tmp);
+    assert_eq!(report["summary"]["groups"], 1, "the full-mode pair still dedups: {report}");
+    assert_eq!(
+        report["summary"]["skipped_archives"][0][0], "mo-only.tar",
+        "{report}"
+    );
+    assert!(
+        report["summary"]["skipped_archives"][0][1]
+            .as_str()
+            .unwrap()
+            .contains("metadata-only"),
+        "{report}"
+    );
+    assert_matches_fixture("metadata_only_skips.json", report);
 }
 
 /// Issue #9: freeze the keeper-star fields with NON-degenerate values — a
