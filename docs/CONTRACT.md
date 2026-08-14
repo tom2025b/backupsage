@@ -9,11 +9,16 @@ which versions) is tracked separately in issue #57.
 
 Every surface below is frozen as a committed fixture under
 `tests/fixtures/contract/` and compared on every test run by
-`tests/contract.rs` — eight fixtures: one per surface plus
+`tests/contract.rs` — ten fixtures: one per surface plus
 completed-with-skips variants of `search --all --json` and `dedup --json`
 (populated `skipped[]` / `archives_offline`), plus `dedup_chain.json`,
 which pins the keeper-star fields (#9) at non-degenerate values — a real
-transitive-only member with `actionable: false` and `hamming_to_keep > 3`:
+transitive-only member with `actionable: false` and `hamming_to_keep > 3` —
+plus two more non-degenerate content-mode corpora (#71): `search_only.json`
+(a `search-only` archive's `mode` field on `search --all --json`) and
+`metadata_only_skips.json` (a `metadata-only` archive's worded skip on
+`dedup --json`, alongside a normal duplicate pair so `summary.groups`
+stays non-zero too):
 
 ```bash
 cargo test --test contract          # verify against the frozen contract
@@ -33,10 +38,10 @@ BackupSage never rewrites or deletes from an archive.
 
 | Surface | Shape | Status |
 |---|---|---|
-| `dedup --json` | Typed structs in `src/report.rs`, top-level `"version": 1` | **Stable.** Versioned, additive-only, consumed by scripts and the future web UI. v1.0.2 (#9) added `Member.actionable`, `Group.review_only_bytes`, `Summary.transitive_only_files`/`review_only_bytes`, `params.actionable_rule` — additive, still version 1. `reclaimable_bytes`/`duplicate_files` now count only keeper-star-safe members (correctness fix: previously inflated by transitive-only members whose distance to the keeper exceeds the threshold). |
+| `dedup --json` | Typed structs in `src/report.rs`, top-level `"version": 1` | **Stable.** Versioned, additive-only, consumed by scripts and the future web UI. v1.0.2 (#9) added `Member.actionable`, `Group.review_only_bytes`, `Summary.transitive_only_files`/`review_only_bytes`, `params.actionable_rule` — additive, still version 1. `reclaimable_bytes`/`duplicate_files` now count only keeper-star-safe members (correctness fix: previously inflated by transitive-only members whose distance to the keeper exceeds the threshold). v1.0.2 (#71) also added `ReportArchive.content_mode` and a `metadata-only` case in `summary.skipped_archives` (alongside the existing `v2-limited` case) — additive, still version 1. A metadata-only-only master now exits 2 where it previously exited 0 with an empty, unexplained report. |
 | `search --json` | `{query, hits[], truncated, mode}`; hits carry `path`, `matches`, `snippet`, and `path_bytes` (hex) only for non-UTF-8 paths | **Frozen-as-observed.** No version field yet; fixture-protected; changes must be additive. v1.0.2 (#70) added top-level `mode` (`full`/`search-only`/`metadata-only`) — additive. On a `search-only` index `matches` is `null`: contentless FTS cannot run `highlight()`, and `snippet` is absent for the same reason. Full-mode output is byte-identical to earlier v1.x. |
-| `search --all --json` | `{archives[{archive, truncated, hits[]}], skipped[{archive, reason}]}` | **Frozen-as-observed.** Same rules as `search --json`, including `matches: null` from a `search-only` child. A `metadata-only` child is never searched: it appears in `skipped` with a worded reason, which is exit 2. The per-archive `mode` field is #71. |
-| `master list --json` | Array of `{archive_id, label, source, source_type, db_path, schema_version, files, completed, status, indexed_unix}` | **Frozen-as-observed.** Same rules. |
+| `search --all --json` | `{archives[{archive, truncated, mode, hits[]}], skipped[{archive, reason}]}` | **Frozen-as-observed.** Same rules as `search --json`, including `matches: null` from a `search-only` child. A `metadata-only` child is never searched: it appears in `skipped` with a worded reason, which is exit 2. v1.0.2 (#71) added the per-archive `mode` field — additive, present on every successfully-searched archive. `--snippets` against a search-only archive now also prints a stderr note, matching the single-archive path's existing note. |
+| `master list --json` | Array of `{archive_id, label, source, source_type, db_path, schema_version, files, completed, status, indexed_unix, content_mode}` | **Frozen-as-observed.** Same rules. v1.0.2 (#71) added `content_mode` — additive. |
 | `master verify --json` | Array of `{archive_id, label, status, source}` | **Frozen-as-observed.** Same rules. |
 
 "Frozen-as-observed" means: the shape carries no version field today, but

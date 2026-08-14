@@ -69,6 +69,16 @@ fn run() -> Result<i32> {
         Commands::Search(args) if args.all => {
             let m = open_master_checked(&master_path)?;
             let outcome = searcher::search_all(&m, &args.keyword, args.limit, args.snippets)?;
+            if args.snippets {
+                for fed in &outcome.per_archive {
+                    if fed.content_mode == "search-only" {
+                        eprintln!(
+                            "note: '{}' is search-only — snippets are unavailable (no stored text)",
+                            sanitize(&fed.archive_label)
+                        );
+                    }
+                }
+            }
             if args.json {
                 println!("{}", search_all_json(&outcome));
             } else {
@@ -295,6 +305,7 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
                             "db_path": r.db_path, "schema_version": r.schema_version,
                             "files": r.files_count, "completed": r.completed,
                             "status": r.status, "indexed_unix": r.indexed_unix,
+                            "content_mode": r.content_mode,
                         })
                     })
                     .collect();
@@ -705,6 +716,7 @@ fn print_master_table(rows: &[master::ArchiveRow]) {
         header_cell("Type"),
         header_cell("Files"),
         header_cell("Schema"),
+        header_cell("Mode"),
         header_cell("Status"),
         header_cell("Indexed"),
         header_cell("Source"),
@@ -721,6 +733,7 @@ fn print_master_table(rows: &[master::ArchiveRow]) {
             Cell::new(sanitize(&r.source_type)),
             Cell::new(format_number(r.files_count)).set_alignment(CellAlignment::Right),
             Cell::new(format!("v{}", r.schema_version)),
+            Cell::new(sanitize(&r.content_mode)),
             Cell::new(sanitize(&r.status)).fg(status_color),
             Cell::new(r.indexed_unix.map(fmt_unix).unwrap_or_else(|| "-".into())),
             Cell::new(sanitize(&r.source_path)).fg(Color::DarkGrey),
@@ -749,6 +762,7 @@ fn search_all_json(outcome: &searcher::FederatedOutcome) -> String {
             serde_json::json!({
                 "archive": f.archive_label,
                 "truncated": f.truncated,
+                "mode": f.content_mode,
                 "hits": f.hits.iter().map(hit_json).collect::<Vec<_>>(),
             })
         })

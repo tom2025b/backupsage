@@ -413,15 +413,25 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
             .collect(),
         skipped_archives: registry
             .iter()
-            .filter(|a| in_scope(a.archive_id) && a.status == STATUS_V2_LIMITED)
-            .map(|a| {
-                (
-                    a.label.clone(),
-                    format!(
-                        "v2-limited — no hashes; run `backupsage index {}` to upgrade",
-                        a.source_path
-                    ),
-                )
+            .filter(|a| in_scope(a.archive_id))
+            .filter_map(|a| {
+                if a.status == STATUS_V2_LIMITED {
+                    Some((
+                        a.label.clone(),
+                        format!(
+                            "v2-limited — no hashes; run `backupsage index {}` to upgrade",
+                            a.source_path
+                        ),
+                    ))
+                } else if a.content_mode == crate::indexer::ContentMode::MetadataOnly.as_str() {
+                    Some((
+                        a.label.clone(),
+                        "metadata-only — no hashes; re-index with --mode full or search-only"
+                            .into(),
+                    ))
+                } else {
+                    None
+                }
             })
             .collect(),
         images_without_phash,
@@ -454,6 +464,7 @@ pub fn run_dedup(master: &Master, p: &DedupParams) -> Result<DedupReport> {
                 source: a.source_path.clone(),
                 source_type: a.source_type.clone(),
                 status: a.status.clone(),
+                content_mode: a.content_mode.clone(),
             })
             .collect(),
         groups,

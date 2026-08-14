@@ -2,6 +2,7 @@
   {
     "archive_id": 1,
     "completed": true,
+    "content_mode": "full",
     "db_path": "<TMP>/alpha.tar.db",
     "files": 4,
     "indexed_unix": "<TS>",
@@ -14,6 +15,7 @@
   {
     "archive_id": 2,
     "completed": true,
+    "content_mode": "full",
     "db_path": "<TMP>/beta.tar.db",
     "files": 4,
     "indexed_unix": "<TS>",

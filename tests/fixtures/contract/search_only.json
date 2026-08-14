@@ -1,0 +1,17 @@
+{
+  "archives": [
+    {
+      "archive": "so-contract.tar",
+      "hits": [
+        {
+          "matches": null,
+          "path": "doc.txt",
+          "snippet": null
+        }
+      ],
+      "mode": "search-only",
+      "truncated": false
+    }
+  ],
+  "skipped": []
+}

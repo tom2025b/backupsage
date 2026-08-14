@@ -237,6 +237,7 @@ pub struct FederatedHit {
     pub archive_label: String,
     pub hits: Vec<SearchHit>,
     pub truncated: bool,
+    pub content_mode: String,
 }
 
 pub struct FederatedOutcome {
@@ -277,7 +278,8 @@ pub fn search_all(
         }
         // Metadata-only archives have no content to match — skip with a
         // worded reason (exit-2 semantics) instead of erroring out (#39).
-        if crate::store::content_mode(&conn) == crate::indexer::ContentMode::MetadataOnly {
+        let mode = crate::store::content_mode(&conn);
+        if mode == crate::indexer::ContentMode::MetadataOnly {
             out.skipped.push((
                 row.label.clone(),
                 "metadata-only — content search unsupported; re-index with \
@@ -293,6 +295,7 @@ pub fn search_all(
                 archive_label: row.label.clone(),
                 hits: outcome.hits,
                 truncated: outcome.truncated,
+                content_mode: mode.as_str().to_string(),
             });
         }
     }
