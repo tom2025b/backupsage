@@ -2,6 +2,7 @@
   "archives": [
     {
       "archive_id": 1,
+      "content_mode": "full",
       "label": "alpha.tar",
       "source": "<TMP>/alpha.tar",
       "source_type": "tar",
@@ -9,6 +10,7 @@
     },
     {
       "archive_id": 2,
+      "content_mode": "full",
       "label": "beta.tar",
       "source": "<TMP>/beta.tar",
       "source_type": "tar",
