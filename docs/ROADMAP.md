@@ -63,8 +63,8 @@ dispositioned in [`docs/SECURITY.md`](SECURITY.md). Rationale is recorded in
 
 - [x] Add a sparse-tar differential end-to-end corpus (#8)
 - [x] Make near-duplicate groups keeper-safe (#9)
-- [ ] Add explicit content indexing modes
-- [ ] Close the v1 debt register and release-contract gaps
+- [x] Add explicit content indexing modes (#39)
+- [x] Close the v1 debt register and release-contract gaps (#11)
 
 **Exit gate:** sparse behavior has end-to-end evidence; every automatic future
 deletion candidate is directly safe relative to its keeper; privacy behavior is
