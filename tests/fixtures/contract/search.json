@@ -12,6 +12,7 @@
       "snippet": "shared payload [magicterm] bytes for exact dedup coverage\n"
     }
   ],
+  "mode": "full",
   "query": "magicterm",
   "truncated": false
 }

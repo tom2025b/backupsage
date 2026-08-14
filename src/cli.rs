@@ -81,6 +81,13 @@ pub struct IndexArgs {
     /// Skip word-frequency statistics (faster; `top` will be empty).
     #[arg(long)]
     pub no_word_stats: bool,
+
+    /// What to store about file content: full, search-only (contentless
+    /// FTS — searchable, no stored plaintext, no snippets), or
+    /// metadata-only (content never read; names/sizes/times only).
+    #[arg(long, default_value = "full",
+          value_parser = ["full", "search-only", "metadata-only"])]
+    pub mode: String,
 }
 
 #[derive(Args, Debug)]

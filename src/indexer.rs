@@ -46,6 +46,43 @@ pub const DEFAULT_MEDIA_CAP: u64 = 64 * 1024 * 1024;
 /// Read chunk size; also the hash-feed granularity.
 const CHUNK: usize = 256 * 1024;
 
+/// What an index stores about file CONTENT (#39). Recorded as the
+/// `content_mode` meta key; an absent key on older indexes means `Full`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentMode {
+    /// Everything: plaintext FTS, word stats, hashes, media metadata.
+    #[default]
+    Full,
+    /// Contentless FTS: the verbatim text is not stored (snippets and
+    /// match counts become unavailable), hashes and media metadata kept,
+    /// word stats dropped. The FTS index still holds tokens and their
+    /// positions, which can approximate the text — this reduces stored
+    /// content; it is not encryption or a privacy boundary.
+    SearchOnly,
+    /// Content is never read: names, sizes, times, entry types only.
+    /// No hashes, no FTS content, no media metadata. Content search is
+    /// rejected; dedup cannot see these archives (#71 reports why).
+    MetadataOnly,
+}
+
+impl ContentMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContentMode::Full => "full",
+            ContentMode::SearchOnly => "search-only",
+            ContentMode::MetadataOnly => "metadata-only",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "full" => Some(ContentMode::Full),
+            "search-only" => Some(ContentMode::SearchOnly),
+            "metadata-only" => Some(ContentMode::MetadataOnly),
+            _ => None,
+        }
+    }
+}
+
 pub struct IndexOptions {
     /// Per-file cap on retained content for text indexing.
     pub max_file_size: u64,
@@ -54,6 +91,8 @@ pub struct IndexOptions {
     pub media_cap: u64,
     /// Whether to maintain the word_freq table used by `top`.
     pub word_stats: bool,
+    /// What to store about content (#39): full, search-only, metadata-only.
+    pub mode: ContentMode,
 }
 
 impl Default for IndexOptions {
@@ -62,6 +101,7 @@ impl Default for IndexOptions {
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             media_cap: DEFAULT_MEDIA_CAP,
             word_stats: true,
+            mode: ContentMode::Full,
         }
     }
 }
@@ -84,6 +124,8 @@ pub struct IndexSummary {
     pub images_phashed: u64,
     /// Images without one (HEIC/RAW/over-cap/decode-failed).
     pub images_no_phash: u64,
+    /// Content mode this index was built with (#39).
+    pub mode: String,
     /// PAX-sparse entries (0.0/0.1/1.0) — unsupported by tar-rs, indexed
     /// name-only so misread condensed bytes never reach hash or FTS.
     pub files_sparse_unsupported: u64,
@@ -305,7 +347,9 @@ impl<'a> IndexRun<'a> {
             match o.kind {
                 "text" => {
                     self.summary.files_indexed += 1;
-                    if self.opts.word_stats {
+                    // word_freq is the frequency-leakage surface: only
+                    // full mode maintains it (#39).
+                    if self.opts.word_stats && self.opts.mode == ContentMode::Full {
                         if let Some(text) = &o.fts_text {
                             accumulate_words(text, &mut self.word_buf);
                             if self.word_buf.len() >= WORD_FLUSH_THRESHOLD {
@@ -466,6 +510,7 @@ pub(crate) fn create_db_with_fallback(
         text_cap: opts.max_file_size,
         media_cap: opts.media_cap,
         word_stats: opts.word_stats,
+        mode: opts.mode,
     };
     let mut protected = outpath::ProtectedSet::new();
     if meta_type == "dir" {
@@ -591,6 +636,7 @@ fn index_tar(
     let mut summary = IndexSummary {
         db_path: db_path.clone(),
         format: fmt.to_string(),
+        mode: opts.mode.as_str().to_string(),
         ..IndexSummary::default()
     };
     let mut run = IndexRun::new(&conn, opts, &mut summary)?;
@@ -739,6 +785,44 @@ fn index_tar(
 
         let size = entry.size();
 
+        if opts.mode == ContentMode::MetadataOnly {
+            // Metadata-only (#39): content is never read — header facts
+            // only; the tar iterator skips unread member data on next().
+            // PAX-sparse real names/logical sizes were already parsed from
+            // the headers above — use them, so the one mode whose entire
+            // product IS metadata records the real name, not the synthetic
+            // GNUSparseFile.<pid> wrapper path or the condensed size.
+            let (real_path, real_raw) = match &sparse_real_name {
+                Some(bytes) => store::capture_text(bytes),
+                None => (entry_path.clone(), path_raw.clone()),
+            };
+            let real_size = sparse_real_size.unwrap_or(size);
+            let rec = EntryRecord {
+                path: &real_path,
+                path_raw: real_raw.as_deref(),
+                entry_type: "file",
+                link_target: None,
+                link_target_raw: None,
+                size: real_size,
+                mtime_unix: mtime,
+                mode,
+                kind: metadata_kind(&real_path, real_size),
+                content_hash: None,
+                img_w: None,
+                img_h: None,
+                phash: None,
+                exif_unix: None,
+                exif_src: None,
+                flags: extra_flags,
+                fts_content: "",
+            };
+            run.record(&rec, None)?;
+            if pax_sparse {
+                run.summary.files_sparse_unsupported += 1;
+            }
+            continue;
+        }
+
         if pax_sparse {
             let (real_path, real_raw) = match &sparse_real_name {
                 Some(bytes) => store::capture_text(bytes),
@@ -874,6 +958,21 @@ fn is_binary(data: &[u8]) -> bool {
 }
 
 /// Truncate a path to `max_chars` characters, keeping the tail visible.
+/// Kind classification without reading content — metadata-only mode (#39):
+/// media kinds from the file name, everything else "binary" ("empty" at
+/// size 0). Never claims "text"; that would imply the content was probed.
+pub(crate) fn metadata_kind(path: &str, size: u64) -> &'static str {
+    if size == 0 {
+        return "empty";
+    }
+    match crate::exif_date::media_kind(path) {
+        crate::exif_date::MediaKind::Image => "image",
+        crate::exif_date::MediaKind::Raw => "raw",
+        crate::exif_date::MediaKind::Video => "video",
+        crate::exif_date::MediaKind::Other => "binary",
+    }
+}
+
 pub(crate) fn truncate_path(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();
     if count <= max_chars {

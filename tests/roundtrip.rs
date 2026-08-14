@@ -388,7 +388,7 @@ fn control_chars_in_content_do_not_inflate_match_counts() {
     assert_eq!(outcome.hits.len(), 1);
     // 0x01 doubles as the highlight marker; without stripping it at index
     // time this count would be inflated by the file's own bytes.
-    assert_eq!(outcome.hits[0].matches, 1);
+    assert_eq!(outcome.hits[0].matches, Some(1));
 }
 
 #[test]

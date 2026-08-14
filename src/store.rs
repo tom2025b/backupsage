@@ -46,6 +46,8 @@ pub struct SourceMeta<'a> {
     pub text_cap: u64,
     pub media_cap: u64,
     pub word_stats: bool,
+    /// Content mode (#39) — recorded as the `content_mode` meta key.
+    pub mode: crate::indexer::ContentMode,
 }
 
 /// One indexed entry. `fts_content` is empty for binaries/links — the row is
@@ -88,6 +90,16 @@ pub fn capture_text(raw: &[u8]) -> (String, Option<Vec<u8>>) {
     }
 }
 
+/// The index's content mode (#39). Absent key (pre-#70 indexes) and any
+/// unrecognized future value read as Full — degrade open, never crash;
+/// full-mode gates are the permissive ones, so misreading a future mode
+/// as Full can only over-warn at query time, never hide data.
+pub fn content_mode(conn: &Connection) -> crate::indexer::ContentMode {
+    crate::searcher::get_meta(conn, "content_mode")
+        .and_then(|v| crate::indexer::ContentMode::parse(&v))
+        .unwrap_or(crate::indexer::ContentMode::Full)
+}
+
 /// Totals recorded into meta by [`finalize_v3`].
 #[derive(Debug, Default, Clone)]
 pub struct FinalizeCounts {
@@ -116,13 +128,36 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
          PRAGMA cache_size=-65536;",
     )?;
 
+    // search-only (#39): external-content FTS5 over a view that exposes
+    // path from `files` and an always-empty content column — the VERBATIM
+    // text is never stored (no content shadow table exists) while path
+    // retrieval keeps working. The FTS index itself still holds tokens
+    // and their positions, which can approximate the original text: this
+    // reduces stored content, it is not encryption or a privacy boundary
+    // (documented in README and ContentMode). snippet()/highlight() read
+    // the empty view column; read paths gate on `content_mode` instead of
+    // relying on that.
+    if meta.mode == crate::indexer::ContentMode::SearchOnly {
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE files_fts USING fts5(
+                path,
+                content,
+                tokenize = 'unicode61',
+                content = 'files_fts_ext',
+                content_rowid = 'id'
+            );",
+        )?;
+    } else {
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE files_fts USING fts5(
+                path,
+                content,
+                tokenize = 'unicode61'
+            );",
+        )?;
+    }
     conn.execute_batch(
-        "CREATE VIRTUAL TABLE files_fts USING fts5(
-            path,
-            content,
-            tokenize = 'unicode61'
-        );
-        CREATE TABLE word_freq (
+        "CREATE TABLE word_freq (
             word        TEXT PRIMARY KEY,
             total_count INTEGER NOT NULL DEFAULT 0,
             doc_count   INTEGER NOT NULL DEFAULT 0
@@ -153,6 +188,13 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
         CREATE INDEX idx_files_hash ON files(content_hash) WHERE content_hash IS NOT NULL;
         CREATE INDEX idx_files_path ON files(path);",
     )?;
+    if meta.mode == crate::indexer::ContentMode::SearchOnly {
+        // The external-content source for files_fts (see above): path from
+        // the real row, content permanently empty.
+        conn.execute_batch(
+            "CREATE VIEW files_fts_ext AS SELECT id, path, '' AS content FROM files;",
+        )?;
+    }
 
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -176,7 +218,11 @@ pub fn create_v3(db_path: &Path, meta: &SourceMeta) -> Result<Connection> {
     set_meta(&conn, "text_cap", &meta.text_cap.to_string())?;
     set_meta(&conn, "media_cap", &meta.media_cap.to_string())?;
     set_meta(&conn, "created_unix", &created.to_string())?;
-    set_meta(&conn, "word_stats", if meta.word_stats { "1" } else { "0" })?;
+    // Non-full modes never populate word_freq — record that honestly so
+    // `top`'s explanation matches reality regardless of the CLI flag.
+    let word_stats_on = meta.word_stats && meta.mode == crate::indexer::ContentMode::Full;
+    set_meta(&conn, "word_stats", if word_stats_on { "1" } else { "0" })?;
+    set_meta(&conn, "content_mode", meta.mode.as_str())?;
     // This index captures raw path bytes (v1.0.1); readers treat the
     // columns as NULL on older indexes.
     set_meta(&conn, "path_raw", "1")?;
@@ -325,6 +371,7 @@ mod tests {
             text_cap: 16 * 1024 * 1024,
             media_cap: 64 * 1024 * 1024,
             word_stats: true,
+            mode: crate::indexer::ContentMode::Full,
         }
     }
 

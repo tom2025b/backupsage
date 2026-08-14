@@ -16,7 +16,8 @@ pub struct SearchHit {
     /// original; None on clean paths and on indexes without the column.
     pub path_raw: Option<Vec<u8>>,
     /// Matches within the file content (matches in the path count as 0).
-    pub matches: i64,
+    /// None on search-only indexes — contentless FTS cannot count matches.
+    pub matches: Option<i64>,
     pub snippet: Option<String>,
 }
 
@@ -105,7 +106,19 @@ pub fn search(
     limit: usize,
     snippets: bool,
 ) -> Result<SearchOutcome> {
-    match run_match(conn, query, limit, snippets) {
+    let mode = crate::store::content_mode(conn);
+    if mode == crate::indexer::ContentMode::MetadataOnly {
+        bail!(
+            "this index is metadata-only — content search is unsupported; \
+             re-index with --mode full or --mode search-only"
+        );
+    }
+    // Contentless FTS (search-only, #39): snippet()/highlight() would
+    // error at query time — matches become None and snippets are dropped;
+    // the CLI layer explains why.
+    let contentless = mode == crate::indexer::ContentMode::SearchOnly;
+    let snippets = snippets && !contentless;
+    match run_match(conn, query, limit, snippets, contentless) {
         Ok((hits, truncated)) => Ok(SearchOutcome {
             hits,
             truncated,
@@ -113,7 +126,7 @@ pub fn search(
         }),
         Err(e) if is_fts_syntax_error(&e) => {
             let quoted = format!("\"{}\"", query.replace('"', "\"\""));
-            let (hits, truncated) = run_match(conn, &quoted, limit, snippets)
+            let (hits, truncated) = run_match(conn, &quoted, limit, snippets, contentless)
                 .with_context(|| format!("literal search for '{query}' failed"))?;
             Ok(SearchOutcome {
                 hits,
@@ -130,9 +143,17 @@ fn run_match(
     query: &str,
     limit: usize,
     snippets: bool,
+    contentless: bool,
 ) -> rusqlite::Result<(Vec<SearchHit>, bool)> {
     // Match count per file: highlight() wraps every content match in a
     // char(1) marker pair, so (marker count) / 2 = number of matches.
+    // Contentless tables cannot run highlight() — select NULL instead.
+    let matches_col = if contentless {
+        "NULL"
+    } else {
+        "(length(highlight(files_fts, 1, char(1), char(1))) -
+          length(replace(highlight(files_fts, 1, char(1), char(1)), char(1), ''))) / 2"
+    };
     let snippet_col = if snippets {
         ", snippet(files_fts, 1, '[', ']', ' … ', 12)"
     } else {
@@ -149,8 +170,7 @@ fn run_match(
     let sql = format!(
         "SELECT
             path,
-            (length(highlight(files_fts, 1, char(1), char(1))) -
-             length(replace(highlight(files_fts, 1, char(1), char(1)), char(1), ''))) / 2
+            {matches_col}
             {snippet_col}
             {raw_col}
          FROM files_fts
@@ -254,6 +274,17 @@ pub fn search_all(
                 row.label.clone(),
                 "incomplete index — results may be partial".into(),
             ));
+        }
+        // Metadata-only archives have no content to match — skip with a
+        // worded reason (exit-2 semantics) instead of erroring out (#39).
+        if crate::store::content_mode(&conn) == crate::indexer::ContentMode::MetadataOnly {
+            out.skipped.push((
+                row.label.clone(),
+                "metadata-only — content search unsupported; re-index with \
+                 --mode full or search-only"
+                    .into(),
+            ));
+            continue;
         }
         let outcome = search(&conn, query, limit_per_archive, snippets)
             .with_context(|| format!("search failed in '{}'", row.label))?;

@@ -44,6 +44,8 @@ fn run() -> Result<i32> {
                 max_file_size: args.max_file_size,
                 media_cap: args.media_cap,
                 word_stats: !args.no_word_stats,
+                mode: indexer::ContentMode::parse(&args.mode)
+                    .expect("clap validates --mode values"),
             };
             for source in &args.sources {
                 let summary = indexer::run_index(source, args.index.as_deref(), &opts)?;
@@ -99,6 +101,10 @@ fn run() -> Result<i32> {
             let conn = searcher::open_index(&db_path)?;
             warn_if_incomplete(&conn);
 
+            let mode = backupsage::store::content_mode(&conn);
+            if args.snippets && mode == indexer::ContentMode::SearchOnly {
+                eprintln!("note: search-only index — snippets are unavailable (no stored text)");
+            }
             let outcome = searcher::search(&conn, &args.keyword, args.limit, args.snippets)?;
             if outcome.literal_fallback {
                 eprintln!(
@@ -112,6 +118,7 @@ fn run() -> Result<i32> {
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "query": args.keyword, "hits": hits, "truncated": outcome.truncated,
+                        "mode": mode.as_str(),
                     }))?
                 );
                 return Ok(0);
@@ -139,6 +146,17 @@ fn run() -> Result<i32> {
             let conn = searcher::open_index(&db_path)?;
             warn_if_incomplete(&conn);
 
+            match backupsage::store::content_mode(&conn) {
+                indexer::ContentMode::Full => {}
+                m => {
+                    println!(
+                        "this index is {} — word statistics are not stored; \
+                         re-index with --mode full to use `top`.",
+                        m.as_str()
+                    );
+                    return Ok(0);
+                }
+            }
             let rows = searcher::top_words(&conn, args.limit)?;
             if rows.is_empty() {
                 if searcher::get_meta(&conn, "word_stats").as_deref() == Some("0") {
@@ -491,6 +509,14 @@ fn print_index_summary(s: &IndexSummary) {
             s.files_truncated
         );
     }
+    match s.mode.as_str() {
+        "search-only" => println!(
+            "Mode     : search-only (verbatim text not stored; tokens and \
+             positions remain searchable — not a privacy boundary)"
+        ),
+        "metadata-only" => println!("Mode     : metadata-only (content not read)"),
+        _ => {}
+    }
     if s.files_sparse_unsupported > 0 {
         println!(
             "warning: {} unsupported PAX sparse dialects — indexed name-only \
@@ -763,9 +789,13 @@ fn print_search_table(hits: &[searcher::SearchHit], snippets: bool) {
             Cell::new(i + 1)
                 .set_alignment(CellAlignment::Right)
                 .fg(Color::DarkGrey),
-            Cell::new(hit.matches)
-                .set_alignment(CellAlignment::Right)
-                .fg(Color::Yellow),
+            Cell::new(
+                hit.matches
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "-".into()),
+            )
+            .set_alignment(CellAlignment::Right)
+            .fg(Color::Yellow),
             Cell::new(sanitize(&hit.path)),
         ];
         if snippets {
