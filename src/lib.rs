@@ -11,6 +11,7 @@ pub mod indexer;
 pub mod master;
 pub mod outpath;
 pub mod phash;
+pub mod plan;
 pub mod report;
 pub mod searcher;
 pub mod source_dir;
