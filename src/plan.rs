@@ -2724,7 +2724,7 @@ mod contract {
                 source: SourceRef {
                     root_id: 0,
                     file_id,
-                    parts_raw: vec![hex(src_name)],
+                    parts_raw: src_name.split('/').map(hex).collect(),
                     display: src_name.to_string(),
                     content_hash: format!(
                         "b3:{}",
@@ -2735,7 +2735,7 @@ mod contract {
                 },
                 dest: DestPath {
                     root_id: 1,
-                    parts_raw: vec![hex(dest_name)],
+                    parts_raw: dest_name.split('/').map(hex).collect(),
                     display: dest_name.to_string(),
                 },
                 conflict: Conflict::None,
@@ -2782,6 +2782,133 @@ mod contract {
             p.invariants_hold().is_err(),
             "a rename cascading onto an existing genuine name must fail invariants, never silently drop or overwrite a file"
         );
+    }
+
+    /// The precise case the heuristic-stripping bug corrupted, isolated from
+    /// every other collision so nothing else can mask the effect: TWO
+    /// entries are BOTH genuinely already named `report-1.txt` and land in
+    /// the same directory — a real, direct collision on their actual shared
+    /// name, needing no suffix-recovery guesswork at all. The old heuristic
+    /// stripped both down to a fictitious base `report.txt` before grouping,
+    /// so it renamed the winner to `report.txt` (a name it never had) and the
+    /// loser to `report-1.txt` — silently wrong output that
+    /// `invariants_hold` cannot see, because nothing collides in that wrong
+    /// output either. This is why that test above is not enough on its own:
+    /// it can only prove the fail-closed shape, not name-level correctness.
+    #[test]
+    fn two_genuinely_identical_suffix_shaped_names_collide_on_their_real_name_not_a_fiction() {
+        let src = Root {
+            root_id: 0,
+            role: RootRole::Source,
+            path_display: "/plans/src/photos".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/src/photos"),
+            source: Some(SourceBinding {
+                label: "photos".to_string(),
+                index_uuid: crate::report::to_hex(
+                    &blake3::hash(b"identical-uuid").as_bytes()[..16],
+                ),
+                index_schema_version: 3,
+                content_mode: ContentMode::Full,
+                hash_algo: "blake3".to_string(),
+                phash_algo: "sage-dct-v1".to_string(),
+                files_indexed: 2,
+                source_type: SourceType::Dir,
+                fingerprint: Fingerprint::None {
+                    reason: NoFingerprintReason::DirectorySourceV1,
+                },
+            }),
+        };
+        let dst = Root {
+            root_id: 1,
+            role: RootRole::Destination,
+            path_display: "/plans/dest".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/dest"),
+            source: None,
+        };
+        let hex = |s: &str| crate::report::to_hex(s.as_bytes());
+        let make = |file_id: i64, src_name: &str, seed: &str| Action {
+            action_id: String::new(),
+            ordinal: 0,
+            op: Op::Move {
+                source: SourceRef {
+                    root_id: 0,
+                    file_id,
+                    parts_raw: src_name.split('/').map(hex).collect(),
+                    display: src_name.to_string(),
+                    content_hash: format!(
+                        "b3:{}",
+                        crate::report::to_hex(blake3::hash(seed.as_bytes()).as_bytes())
+                    ),
+                    size: 10,
+                    mtime_unix: Some(1_500_000_000),
+                },
+                dest: DestPath {
+                    root_id: 1,
+                    // BOTH entries' real name is already report-1.txt.
+                    parts_raw: vec![hex("report-1.txt")],
+                    display: "report-1.txt".to_string(),
+                },
+                conflict: Conflict::None,
+            },
+        };
+        let mut p = Plan {
+            plan_schema_version: PLAN_SCHEMA_VERSION,
+            kind: PlanKind::Organize,
+            policy: Policy::Organize(OrganizePolicy {
+                layout: Layout::YearMonth,
+                unknown_date_dir: "unknown-date".to_string(),
+                date_source_order: vec![
+                    DateSource::Exif,
+                    DateSource::Mtime,
+                    DateSource::ArchiveDate,
+                ],
+                conflict_rule: ConflictRule::SuffixOrdinal,
+            }),
+            roots: vec![src, dst],
+            actions: vec![
+                make(1, "a/report-1.txt", "identical-a"),
+                make(2, "b/report-1.txt", "identical-b"),
+            ],
+            groups: Vec::new(),
+            excluded: Vec::new(),
+            summary: Summary {
+                actions_total: 0,
+                actions_by_op: Vec::new(),
+                bytes_affected: 0,
+                groups_total: 0,
+                excluded_total: 0,
+                excluded_bytes: 0,
+                roots_written: Vec::new(),
+            },
+        };
+        p.canonicalize()
+            .expect("two genuinely-colliding entries canonicalize");
+
+        let mut dests: Vec<(i64, String)> = p
+            .actions
+            .iter()
+            .filter_map(|a| match &a.op {
+                Op::Move { source, dest, .. } => Some((source.file_id, dest.display.clone())),
+                _ => None,
+            })
+            .collect();
+        dests.sort_by_key(|(fid, _)| *fid);
+
+        // Correct behaviour: their real shared name IS report-1.txt, so the
+        // winner keeps it verbatim and the loser gets report-1-1.txt — never
+        // a name neither file ever had (report.txt), and never a name that
+        // silently steals a third file's identity (report-2.txt).
+        assert_eq!(
+            dests,
+            vec![
+                (1, "report-1.txt".to_string()),
+                (2, "report-1-1.txt".to_string())
+            ],
+            "the base of a genuine name collision must be the real shared name itself, \
+             never a heuristically-stripped fiction"
+        );
+        p.invariants_hold()
+            .expect("this is a legitimately resolvable collision and must not be refused");
     }
 
     /// Every structural rule the JSON Schema cannot express.
