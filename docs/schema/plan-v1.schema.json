@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tom2025b/backupsage/docs/schema/plan-v1.schema.json",
+  "title": "BackupSage plan document (plan_schema_version 1)",
+  "description": "Issue #75. Hand-authored, reviewed alongside src/plan.rs as the frozen contract — not generated, so it cannot silently drift with the types. Structural rules the schema cannot express (root_id closure, source/destination uniqueness, per-kind op legality, derived-field agreement) are enforced by Plan::invariants_hold and Plan::verify_derived, not here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan_schema_version", "kind", "policy", "roots", "actions", "groups", "excluded", "summary"],
+  "properties": {
+    "plan_schema_version": { "type": "integer", "const": 1 },
+    "kind": { "$ref": "#/$defs/plan_kind" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "roots": { "type": "array", "items": { "$ref": "#/$defs/root" } },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "groups": { "type": "array", "items": { "$ref": "#/$defs/group" } },
+    "excluded": { "type": "array", "items": { "$ref": "#/$defs/excluded" } },
+    "summary": { "$ref": "#/$defs/summary" }
+  },
+  "$defs": {
+    "plan_kind": { "type": "string", "enum": ["organize", "extract", "dedup"] },
+
+    "hex_bytes": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{2})*$",
+      "description": "Lowercase hex, even length, no 0x prefix — the encoding of every raw path component and every path_raw."
+    },
+    "hex32": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "index_uuid: 16 bytes." },
+    "b3_hash": {
+      "type": "string",
+      "pattern": "^b3:[0-9a-f]{64}$",
+      "description": "\"b3:<64 lowercase hex>\" — the one hash prefix used everywhere in a plan."
+    },
+    "entry_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_id", "file_id"],
+      "properties": {
+        "root_id": { "type": "integer", "minimum": 0 },
+        "file_id": { "type": "integer" }
+      }
+    },
+
+    "policy": {
+      "oneOf": [
+        { "$ref": "#/$defs/organize_policy" },
+        { "$ref": "#/$defs/extract_policy" },
+        { "$ref": "#/$defs/dedup_policy" }
+      ]
+    },
+    "organize_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["for", "layout", "unknown_date_dir", "date_source_order", "conflict_rule"],
+      "properties": {
+        "for": { "const": "organize" },
+        "layout": { "type": "string", "enum": ["yyyy/yyyy-mm"] },
+        "unknown_date_dir": { "type": "string" },
+        "date_source_order": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["exif", "mtime", "archive_date"] }
+        },
+        "conflict_rule": { "type": "string", "enum": ["suffix_ordinal"] }
+      }
+    },
+    "extract_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["for", "selection"],
+      "properties": {
+        "for": { "const": "extract" },
+        "selection": { "type": "string", "enum": ["explicit", "glob", "all"] }
+      }
+    },
+    "dedup_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "for", "match_kinds", "near_threshold", "min_size", "include_empty",
+        "across_only", "replica_floor", "keep_policy"
+      ],
+      "properties": {
+        "for": { "const": "dedup" },
+        "match_kinds": { "type": "array", "items": { "type": "string", "enum": ["exact", "near"] } },
+        "near_threshold": { "type": "integer", "minimum": 0 },
+        "min_size": { "type": "integer", "minimum": 0 },
+        "include_empty": { "type": "boolean" },
+        "across_only": { "type": "boolean" },
+        "replica_floor": { "type": "integer", "minimum": 0 },
+        "keep_policy": { "type": "string" }
+      }
+    },
+
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_id", "role", "path_display", "path_raw", "source"],
+      "properties": {
+        "root_id": { "type": "integer", "minimum": 0 },
+        "role": { "type": "string", "enum": ["source", "destination", "quarantine"] },
+        "path_display": { "type": "string" },
+        "path_raw": { "$ref": "#/$defs/hex_bytes" },
+        "source": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/source_binding" }] }
+      }
+    },
+    "source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label", "index_uuid", "index_schema_version", "content_mode", "hash_algo",
+        "phash_algo", "files_indexed", "source_type", "fingerprint"
+      ],
+      "properties": {
+        "label": { "type": "string" },
+        "index_uuid": { "$ref": "#/$defs/hex32" },
+        "index_schema_version": { "type": "integer" },
+        "content_mode": { "type": "string", "enum": ["full", "search-only", "metadata-only"] },
+        "hash_algo": { "type": "string" },
+        "phash_algo": { "type": "string" },
+        "files_indexed": { "type": "integer", "minimum": 0 },
+        "source_type": { "type": "string", "enum": ["tar", "dir"] },
+        "fingerprint": { "$ref": "#/$defs/fingerprint" }
+      }
+    },
+    "fingerprint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value", "size", "mtime_unix"],
+          "properties": {
+            "kind": { "const": "archive_blake3" },
+            "value": { "$ref": "#/$defs/b3_hash" },
+            "size": { "type": "integer", "minimum": 0 },
+            "mtime_unix": { "oneOf": [{ "type": "null" }, { "type": "integer" }] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason"],
+          "properties": {
+            "kind": { "const": "none" },
+            "reason": { "type": "string", "enum": ["directory_source_v1"] }
+          }
+        }
+      ]
+    },
+
+    "path_component": {
+      "allOf": [
+        { "$ref": "#/$defs/hex_bytes" },
+        { "not": { "enum": ["2e", "2e2e"] } }
+      ],
+      "description": "hex('.') = 2e, hex('..') = 2e2e — both forbidden. Emptiness, embedded '/' and NUL are additionally checked by Plan::invariants_hold on the DECODED bytes, which this pattern-only schema cannot see."
+    },
+
+    "source_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_id", "file_id", "parts_raw", "display", "content_hash", "size", "mtime_unix"],
+      "properties": {
+        "root_id": { "type": "integer", "minimum": 0 },
+        "file_id": { "type": "integer" },
+        "parts_raw": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/path_component" } },
+        "display": { "type": "string" },
+        "content_hash": { "$ref": "#/$defs/b3_hash" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime_unix": { "oneOf": [{ "type": "null" }, { "type": "integer" }] }
+      }
+    },
+    "dest_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_id", "parts_raw", "display"],
+      "properties": {
+        "root_id": { "type": "integer", "minimum": 0 },
+        "parts_raw": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/path_component" } },
+        "display": { "type": "string" }
+      }
+    },
+    "conflict": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule"],
+          "properties": { "rule": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule", "ordinal", "competing_with"],
+          "properties": {
+            "rule": { "const": "suffix_ordinal" },
+            "ordinal": { "type": "integer", "minimum": 0 },
+            "competing_with": {
+              "type": "array",
+              "minItems": 2,
+              "items": { "$ref": "#/$defs/entry_key" }
+            }
+          }
+        }
+      ]
+    },
+
+    "op": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "dest"],
+          "properties": {
+            "action": { "const": "mkdir" },
+            "dest": { "$ref": "#/$defs/dest_path" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "source", "dest", "conflict"],
+          "properties": {
+            "action": { "const": "move" },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "dest": { "$ref": "#/$defs/dest_path" },
+            "conflict": { "$ref": "#/$defs/conflict" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "source", "dest", "conflict"],
+          "properties": {
+            "action": { "const": "extract" },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "dest": { "$ref": "#/$defs/dest_path" },
+            "conflict": { "$ref": "#/$defs/conflict" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "source", "dest", "group_id", "slot"],
+          "properties": {
+            "action": { "const": "quarantine" },
+            "source": { "$ref": "#/$defs/source_ref" },
+            "dest": { "$ref": "#/$defs/dest_path" },
+            "group_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+            "slot": { "type": "string", "pattern": "^[0-9a-f]{8}$" }
+          }
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "ordinal", "op"],
+      "properties": {
+        "action_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "op": { "$ref": "#/$defs/op" }
+      }
+    },
+
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_id", "match_kind", "max_distance", "keeper", "members",
+        "replica_floor", "reclaimable_bytes", "review_only_bytes"
+      ],
+      "properties": {
+        "group_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "match_kind": { "type": "string", "enum": ["exact", "near"] },
+        "max_distance": { "type": "integer", "minimum": 0 },
+        "keeper": { "$ref": "#/$defs/group_keeper" },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/group_member" } },
+        "replica_floor": { "$ref": "#/$defs/replica_floor" },
+        "reclaimable_bytes": { "type": "integer", "minimum": 0 },
+        "review_only_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "group_keeper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "reason"],
+      "properties": {
+        "entry": { "$ref": "#/$defs/source_ref" },
+        "reason": { "type": "string" }
+      }
+    },
+    "group_member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "disposition", "reason", "actionable", "hamming_to_keep", "shadowed", "sparse"],
+      "properties": {
+        "entry": { "$ref": "#/$defs/source_ref" },
+        "disposition": { "type": "string", "enum": ["keep", "quarantine", "leave"] },
+        "reason": { "type": "string" },
+        "actionable": { "type": "boolean" },
+        "hamming_to_keep": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
+        "shadowed": { "type": "boolean" },
+        "sparse": { "type": "boolean" }
+      }
+    },
+    "replica_floor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "observed", "remaining_after", "counted_scope"],
+      "properties": {
+        "required": { "type": "integer", "minimum": 0 },
+        "observed": { "type": "integer", "minimum": 0 },
+        "remaining_after": { "type": "integer", "minimum": 0 },
+        "counted_scope": { "type": "string", "enum": ["registered_reachable_archives"] }
+      }
+    },
+
+    "excluded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_id", "file_id", "parts_raw", "display", "content_hash", "size", "mtime_unix", "reason"],
+      "properties": {
+        "root_id": { "type": "integer", "minimum": 0 },
+        "file_id": { "type": "integer" },
+        "parts_raw": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/path_component" } },
+        "display": { "type": "string" },
+        "content_hash": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/b3_hash" }] },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime_unix": { "oneOf": [{ "type": "null" }, { "type": "integer" }] },
+        "reason": { "type": "string" }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actions_total", "actions_by_op", "bytes_affected", "groups_total",
+        "excluded_total", "excluded_bytes", "roots_written"
+      ],
+      "properties": {
+        "actions_total": { "type": "integer", "minimum": 0 },
+        "actions_by_op": { "type": "array", "items": { "$ref": "#/$defs/op_count" } },
+        "bytes_affected": { "type": "integer", "minimum": 0 },
+        "groups_total": { "type": "integer", "minimum": 0 },
+        "excluded_total": { "type": "integer", "minimum": 0 },
+        "excluded_bytes": { "type": "integer", "minimum": 0 },
+        "roots_written": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "op_count": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "count"],
+      "properties": {
+        "op": { "type": "string", "enum": ["mkdir", "move", "extract", "quarantine"] },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
