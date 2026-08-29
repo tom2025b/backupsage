@@ -238,6 +238,24 @@ left alone is indefensible.
   deliberately differed), and a suffixed destination's `display` was derived before
   the suffix was applied rather than after (caught by asserting the resolved
   filename, not just the ordinal).
+- A fresh-reader review (codex, read-only, before this branch's PR) found two further
+  real defects the design's own tests had not covered: the root-id remap's fallback
+  silently passed through a *dangling* reference (a `root_id` that was never a real
+  root) rather than refusing it, and `base_components` recovered a destination's
+  pre-suffix name by heuristically stripping any trailing `-N`, indistinguishable
+  from a source file genuinely named e.g. `report-1.txt`. Both are now fixed —
+  the remap is preceded by an explicit closure check over every reference, and
+  `base_components` reads the entry's own prior `Conflict` field (ground truth for
+  what this module actually suffixed) instead of guessing from bytes.
+- **Residual risk, accepted deliberately**: full N-way collision resolution against
+  RENAME TARGETS — a collision loser's suffix landing on a destination a third,
+  unrelated entry already occupies by its genuine name — is not solved here.
+  `canonicalize`'s collision grouping is single-pass, keyed on pre-suffix bases,
+  not on final post-rename names. What this issue owes, and delivers, is that the
+  case never corrupts silently: `invariants_hold`'s existing destination-uniqueness
+  check refuses such a plan rather than applying it with a lost or overwritten file.
+  Iterative/fixed-point resolution so more such plans succeed instead of refusing is
+  future work, not #75's scope.
 - `#16` (plan generation from live dedup/organize data) and `#76`/`#77` (precondition
   verification and the apply path) inherit every field frozen here without needing
   to renegotiate the shape. #76 in particular can rely on `Fingerprint`'s tagged
@@ -251,11 +269,14 @@ left alone is indefensible.
 
 ## Verification
 
-21 tests in `src/plan.rs`'s `plan::contract` module cover all four acceptance
-criteria, four byte-exact golden fixtures (one per plan kind plus the empty-dedup
-case), schema validation with six negative cases, round-trip coverage of every
-tagged enum variant, hand-edited-derivation rejection, structural invariant
-rejection, the conflict-ordinal cross-cutting defect, and idempotence. The
+25 tests in `src/plan.rs`'s `plan::contract` module (21 from the original design
+plus 4 written in response to the fresh-reader review, two per finding) cover all
+four acceptance criteria, four byte-exact golden fixtures (one per plan kind plus
+the empty-dedup case), schema validation with six negative cases, round-trip
+coverage of every tagged enum variant, hand-edited-derivation rejection,
+structural invariant rejection, the conflict-ordinal cross-cutting defect,
+idempotence, and both review findings (with a paired test proving the harder
+unsolved rename-cascade case fails closed rather than corrupting). The
 cross-process determinism criterion (acceptance criterion 2) re-execs the test
 binary itself via `std::env::current_exe()` rather than shipping a plan-emitting
 dev command, for the same #77-driven reason fixtures stay `#[cfg(test)]`-gated.

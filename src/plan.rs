@@ -578,6 +578,44 @@ impl Plan {
         let roots_by_old_id: BTreeMap<u32, Root> =
             self.roots.iter().cloned().map(|r| (r.root_id, r)).collect();
 
+        // Every root_id referenced anywhere in the document must be one of
+        // THIS root's own original ids — checked before the remap is built,
+        // never left to a fallback default. A dangling reference (an id that
+        // was never a real root) must be refused here: a remap that quietly
+        // passed it through unchanged could alias it onto whatever root ends
+        // up with that same NEW dense id after renumbering, silently
+        // corrupting which root an action, group member, or excluded entry
+        // actually points to.
+        let known: std::collections::BTreeSet<u32> = roots_by_old_id.keys().copied().collect();
+        for a in &self.actions {
+            for id in referenced_root_ids(&a.op) {
+                if !known.contains(&id) {
+                    bail!("action references unknown root_id {id}");
+                }
+            }
+        }
+        for g in &self.groups {
+            if !known.contains(&g.keeper.entry.root_id) {
+                bail!(
+                    "group keeper references unknown root_id {}",
+                    g.keeper.entry.root_id
+                );
+            }
+            for m in &g.members {
+                if !known.contains(&m.entry.root_id) {
+                    bail!(
+                        "group member references unknown root_id {}",
+                        m.entry.root_id
+                    );
+                }
+            }
+        }
+        for e in &self.excluded {
+            if !known.contains(&e.root_id) {
+                bail!("excluded entry references unknown root_id {}", e.root_id);
+            }
+        }
+
         let mut indexed: Vec<(u32, Vec<u8>)> = Vec::with_capacity(self.roots.len());
         for r in &self.roots {
             indexed.push((r.root_id, unhex(&r.path_raw)?));
@@ -603,7 +641,11 @@ impl Plan {
         }
         self.roots = new_roots;
 
-        // Remap every root_id reference throughout the document.
+        // Remap every root_id reference throughout the document. `remap`
+        // is guaranteed total over every id actually referenced — the
+        // validation pass above already refused anything it isn't — so the
+        // `unwrap_or` fallback is unreachable defense-in-depth, never a
+        // silent pass-through of a bad id.
         let remap_id = |old: u32| -> u32 { *remap.get(&old).unwrap_or(&old) };
 
         for a in &mut self.actions {
@@ -667,16 +709,20 @@ impl Plan {
 
         let mut entries: Vec<Entry> = Vec::new();
         for (i, a) in self.actions.iter().enumerate() {
-            let (dest, source, is_conflictable) = match &a.op {
-                Op::Move { dest, source, .. } | Op::Extract { dest, source, .. } => {
-                    (dest, source, true)
+            let (dest, source, conflict) = match &a.op {
+                Op::Move {
+                    dest,
+                    source,
+                    conflict,
                 }
+                | Op::Extract {
+                    dest,
+                    source,
+                    conflict,
+                } => (dest, source, conflict),
                 Op::Mkdir { .. } | Op::Quarantine { .. } => continue,
             };
-            if !is_conflictable {
-                continue;
-            }
-            let base_parts = base_components(dest)?;
+            let base_parts = base_components(dest, conflict)?;
             entries.push(Entry {
                 action_idx: i,
                 dest_root: dest.root_id,
@@ -1261,31 +1307,37 @@ fn split_stem_ext(component: &[u8]) -> (&[u8], &[u8]) {
     }
 }
 
-fn base_components(dest: &DestPath) -> Result<Vec<String>> {
-    // Base = current parts, with any frozen "-N" suffix on the final
-    // component stripped, so canonicalize stays idempotent across repeated
-    // calls. A component is only ever stripped if re-applying rule 13(d)'s
-    // format to the stripped stem reproduces the current component exactly
-    // for SOME N — otherwise it is left as-is (it was never suffixed).
+/// Base = current parts, with the suffix rule 13(d) added on a PRIOR
+/// canonicalize pass removed again — so canonicalize stays idempotent across
+/// repeated calls.
+///
+/// Whether a suffix was added, and exactly what it was, is read from `prior`
+/// — the entry's OWN `Conflict` field from before this pass — never guessed
+/// from the destination bytes. A heuristic ("strip any trailing `-N`") would
+/// misfire on a source file genuinely named e.g. `report-1.txt`: stripping
+/// its real name as though canonicalize had added the suffix would merge it
+/// into the wrong collision group and could overwrite it with a different
+/// entry's rename. `prior` names the exact ordinal this component was
+/// suffixed with (0 or none means it was never suffixed, so the current
+/// parts already ARE the base), so only a suffix THIS module actually wrote
+/// is ever removed.
+fn base_components(dest: &DestPath, prior: &Conflict) -> Result<Vec<String>> {
+    let ordinal = match prior {
+        Conflict::None => return Ok(dest.parts_raw.clone()),
+        Conflict::SuffixOrdinal { ordinal: 0, .. } => return Ok(dest.parts_raw.clone()),
+        Conflict::SuffixOrdinal { ordinal, .. } => *ordinal,
+    };
     let mut parts = dest.parts_raw.clone();
-    if let Some(last) = parts.last().cloned() {
-        let raw = unhex(&last)?;
-        let (stem, ext) = split_stem_ext(&raw);
-        if let Some(dash) = stem.iter().rposition(|&b| b == b'-') {
-            let (base_stem, num) = (&stem[..dash], &stem[dash + 1..]);
-            if !num.is_empty() && num.iter().all(|b| b.is_ascii_digit()) {
-                let mut rebuilt = base_stem.to_vec();
-                rebuilt.push(b'-');
-                rebuilt.extend_from_slice(num);
-                rebuilt.extend_from_slice(ext);
-                if rebuilt == raw {
-                    let mut base_raw = base_stem.to_vec();
-                    base_raw.extend_from_slice(ext);
-                    *parts.last_mut().unwrap() = crate::report::to_hex(&base_raw);
-                }
-            }
-        }
-    }
+    let last = parts.last().cloned().context("dest has no components")?;
+    let raw = unhex(&last)?;
+    let (stem, ext) = split_stem_ext(&raw);
+    let suffix = format!("-{ordinal}").into_bytes();
+    let stripped = stem.strip_suffix(suffix.as_slice()).with_context(|| {
+        format!("dest component does not end in the recorded suffix -{ordinal}: {last}")
+    })?;
+    let mut base_raw = stripped.to_vec();
+    base_raw.extend_from_slice(ext);
+    *parts.last_mut().unwrap() = crate::report::to_hex(&base_raw);
     Ok(parts)
 }
 
@@ -1319,6 +1371,17 @@ fn set_dest_parts(op: &mut Op, parts: Vec<String>) -> Result<()> {
             Ok(())
         }
         _ => bail!("set_dest_parts called on an op with no dest to rewrite"),
+    }
+}
+
+/// Every root_id an op touches — the dest always, the source when present.
+fn referenced_root_ids(op: &Op) -> Vec<u32> {
+    match op {
+        Op::Mkdir { dest } => vec![dest.root_id],
+        Op::Move { source, dest, .. } | Op::Extract { source, dest, .. } => {
+            vec![source.root_id, dest.root_id]
+        }
+        Op::Quarantine { source, dest, .. } => vec![source.root_id, dest.root_id],
     }
 }
 
@@ -2482,6 +2545,242 @@ mod contract {
         assert!(
             p.verify_derived().is_err(),
             "an inflated remaining_after must be refused"
+        );
+    }
+
+    /// Codex fresh-reader finding, 2026-08-29: `canonicalize`'s root_id remap
+    /// used `.get(&old).unwrap_or(&old)`, so a reference to a root_id that
+    /// never existed passed straight through unchanged. After renumbering to
+    /// a dense 0..n-1 space, that stale value could coincide with a
+    /// DIFFERENT, real root's new id — silently aliasing the reference onto
+    /// the wrong root rather than refusing it. Regression: `canonicalize`
+    /// itself (not just `invariants_hold` on an already-canonical plan) must
+    /// refuse a dangling reference before any remapping happens.
+    #[test]
+    fn canonicalize_refuses_a_dangling_root_id_reference() {
+        let mut p = organize_sample();
+        if let Op::Mkdir { dest } = &mut p.actions[0].op {
+            dest.root_id = 999;
+        }
+        assert!(
+            p.canonicalize().is_err(),
+            "canonicalize must refuse a root_id that was never a real root, not silently remap it"
+        );
+    }
+
+    /// Codex fresh-reader finding, 2026-08-29: `base_components` stripped any
+    /// trailing `-N` from a destination's final component to recover its
+    /// pre-suffix "base" for collision grouping — with no way to tell a
+    /// suffix WE added apart from a source file genuinely named e.g.
+    /// `report-1.txt`. Fixed by reading the entry's own `Conflict` field
+    /// (ground truth for whether and how much was added on a prior pass)
+    /// instead of guessing from the bytes. Regression: a lone, non-colliding
+    /// entry whose real name already looks like `{stem}-{N}{ext}` must reach
+    /// canonical form with that name completely untouched.
+    #[test]
+    fn a_genuinely_suffix_shaped_filename_survives_canonicalization_unchanged() {
+        let src = Root {
+            root_id: 0,
+            role: RootRole::Source,
+            path_display: "/plans/src/photos".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/src/photos"),
+            source: Some(SourceBinding {
+                label: "photos".to_string(),
+                index_uuid: crate::report::to_hex(&blake3::hash(b"regress-uuid").as_bytes()[..16]),
+                index_schema_version: 3,
+                content_mode: ContentMode::Full,
+                hash_algo: "blake3".to_string(),
+                phash_algo: "sage-dct-v1".to_string(),
+                files_indexed: 1,
+                source_type: SourceType::Dir,
+                fingerprint: Fingerprint::None {
+                    reason: NoFingerprintReason::DirectorySourceV1,
+                },
+            }),
+        };
+        let dst = Root {
+            root_id: 1,
+            role: RootRole::Destination,
+            path_display: "/plans/dest".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/dest"),
+            source: None,
+        };
+        let hex = |s: &str| crate::report::to_hex(s.as_bytes());
+        let src_ref = SourceRef {
+            root_id: 0,
+            file_id: 1,
+            parts_raw: vec![hex("report-1.txt")],
+            display: "report-1.txt".to_string(),
+            content_hash: format!(
+                "b3:{}",
+                crate::report::to_hex(blake3::hash(b"regress-content").as_bytes())
+            ),
+            size: 10,
+            mtime_unix: Some(1_500_000_000),
+        };
+        let action = Action {
+            action_id: String::new(),
+            ordinal: 0,
+            op: Op::Move {
+                source: src_ref,
+                dest: DestPath {
+                    root_id: 1,
+                    parts_raw: vec![hex("report-1.txt")],
+                    display: "report-1.txt".to_string(),
+                },
+                conflict: Conflict::None,
+            },
+        };
+        let mut p = Plan {
+            plan_schema_version: PLAN_SCHEMA_VERSION,
+            kind: PlanKind::Organize,
+            policy: Policy::Organize(OrganizePolicy {
+                layout: Layout::YearMonth,
+                unknown_date_dir: "unknown-date".to_string(),
+                date_source_order: vec![
+                    DateSource::Exif,
+                    DateSource::Mtime,
+                    DateSource::ArchiveDate,
+                ],
+                conflict_rule: ConflictRule::SuffixOrdinal,
+            }),
+            roots: vec![src, dst],
+            actions: vec![action],
+            groups: Vec::new(),
+            excluded: Vec::new(),
+            summary: Summary {
+                actions_total: 0,
+                actions_by_op: Vec::new(),
+                bytes_affected: 0,
+                groups_total: 0,
+                excluded_total: 0,
+                excluded_bytes: 0,
+                roots_written: Vec::new(),
+            },
+        };
+        p.canonicalize()
+            .expect("a single non-colliding entry canonicalizes");
+        match &p.actions[0].op {
+            Op::Move { dest, conflict, .. } => {
+                assert_eq!(
+                    dest.display, "report-1.txt",
+                    "a genuine '-1' filename must not be stripped when it has nothing to collide with"
+                );
+                assert!(
+                    matches!(conflict, Conflict::None),
+                    "a lone entry must never be assigned a suffix_ordinal conflict"
+                );
+            }
+            other => panic!("expected a Move op, got {other:?}"),
+        }
+        // Idempotent: canonicalizing again must not change anything further,
+        // proving the fix does not merely happen to work on the first pass.
+        let once = p.clone();
+        p.canonicalize().unwrap();
+        assert_eq!(p, once);
+    }
+
+    /// The harder case this fix does NOT attempt to solve — a rename cascade
+    /// where the loser of a genuine collision is renamed onto a destination
+    /// a THIRD, genuinely-suffix-named entry already occupies. Full N-way
+    /// resolution against renamed targets is out of scope for #75 (recorded
+    /// in the decision log as an accepted residual risk); what #75 owes is
+    /// that this case is never silently corrupted. It is not: `invariants_hold`
+    /// already refuses two actions sharing one final destination, so this
+    /// plan fails CLOSED rather than producing a plan with a lost file.
+    #[test]
+    fn a_rename_cascade_onto_an_existing_name_fails_closed_not_silently() {
+        let src = Root {
+            root_id: 0,
+            role: RootRole::Source,
+            path_display: "/plans/src/photos".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/src/photos"),
+            source: Some(SourceBinding {
+                label: "photos".to_string(),
+                index_uuid: crate::report::to_hex(&blake3::hash(b"cascade-uuid").as_bytes()[..16]),
+                index_schema_version: 3,
+                content_mode: ContentMode::Full,
+                hash_algo: "blake3".to_string(),
+                phash_algo: "sage-dct-v1".to_string(),
+                files_indexed: 3,
+                source_type: SourceType::Dir,
+                fingerprint: Fingerprint::None {
+                    reason: NoFingerprintReason::DirectorySourceV1,
+                },
+            }),
+        };
+        let dst = Root {
+            root_id: 1,
+            role: RootRole::Destination,
+            path_display: "/plans/dest".to_string(),
+            path_raw: crate::report::to_hex(b"/plans/dest"),
+            source: None,
+        };
+        let hex = |s: &str| crate::report::to_hex(s.as_bytes());
+        let make = |file_id: i64, src_name: &str, dest_name: &str, seed: &str| Action {
+            action_id: String::new(),
+            ordinal: 0,
+            op: Op::Move {
+                source: SourceRef {
+                    root_id: 0,
+                    file_id,
+                    parts_raw: vec![hex(src_name)],
+                    display: src_name.to_string(),
+                    content_hash: format!(
+                        "b3:{}",
+                        crate::report::to_hex(blake3::hash(seed.as_bytes()).as_bytes())
+                    ),
+                    size: 10,
+                    mtime_unix: Some(1_500_000_000),
+                },
+                dest: DestPath {
+                    root_id: 1,
+                    parts_raw: vec![hex(dest_name)],
+                    display: dest_name.to_string(),
+                },
+                conflict: Conflict::None,
+            },
+        };
+        let mut p = Plan {
+            plan_schema_version: PLAN_SCHEMA_VERSION,
+            kind: PlanKind::Organize,
+            policy: Policy::Organize(OrganizePolicy {
+                layout: Layout::YearMonth,
+                unknown_date_dir: "unknown-date".to_string(),
+                date_source_order: vec![
+                    DateSource::Exif,
+                    DateSource::Mtime,
+                    DateSource::ArchiveDate,
+                ],
+                conflict_rule: ConflictRule::SuffixOrdinal,
+            }),
+            roots: vec![src, dst],
+            actions: vec![
+                // Two genuine "report.txt" collide — the loser is renamed to
+                // "report-1.txt" by rule 13(d).
+                make(1, "a/report.txt", "report.txt", "cascade-a"),
+                make(2, "b/report.txt", "report.txt", "cascade-b"),
+                // A third entry is genuinely already named "report-1.txt" —
+                // the loser's rename target.
+                make(3, "c/report-1.txt", "report-1.txt", "cascade-c"),
+            ],
+            groups: Vec::new(),
+            excluded: Vec::new(),
+            summary: Summary {
+                actions_total: 0,
+                actions_by_op: Vec::new(),
+                bytes_affected: 0,
+                groups_total: 0,
+                excluded_total: 0,
+                excluded_bytes: 0,
+                roots_written: Vec::new(),
+            },
+        };
+        p.canonicalize()
+            .expect("canonicalize itself must not panic or error on this input");
+        assert!(
+            p.invariants_hold().is_err(),
+            "a rename cascading onto an existing genuine name must fail invariants, never silently drop or overwrite a file"
         );
     }
 
