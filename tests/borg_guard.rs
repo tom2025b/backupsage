@@ -73,6 +73,17 @@ fn canonical_symlink_alias_is_refused() {
 fn descendant_segment_is_refused_before_its_readable_payload_is_opened() {
     let temp = tempfile::tempdir().unwrap();
     let payload = tar_bytes(b"sentinel plaintext that a missing guard would index");
+    // Positive control: these same bytes successfully index and publish as a
+    // tar outside the guarded ancestry. Removing ancestor refusal would make
+    // assert_refused's unwrap_err fail on success, including on noatime mounts.
+    let control = temp.path().join("ordinary.tar");
+    let control_db = temp.path().join("control.db");
+    fs::write(&control, &payload).unwrap();
+    let summary =
+        indexer::run_index(&control, Some(&control_db), &IndexOptions::default()).unwrap();
+    assert_eq!(summary.files_indexed, 1);
+    assert_eq!(summary.files_hashed, 1);
+    assert!(control_db.is_file());
     let repo = make_candidate(&temp.path().join("repo"), &payload);
     let segment = repo.join("data/0/0");
 
@@ -88,11 +99,64 @@ fn descendant_segment_is_refused_before_its_readable_payload_is_opened() {
     let before_atime = fs::metadata(&segment).unwrap().accessed().unwrap();
 
     assert_refused(&segment, &temp.path().join("segment.db"));
+    // Supplemental evidence only: noatime suppresses access-time updates.
     assert_eq!(
         fs::metadata(&segment).unwrap().accessed().unwrap(),
         before_atime,
         "the structural probe must not open the segment payload"
     );
+}
+
+fn assert_padded_fallbacks_refused(repo: &Path, output: &Path) {
+    let marker = repo.join("config");
+    assert_refused(repo, &output.join("missing.db"));
+
+    fs::create_dir(&marker).unwrap();
+    assert_refused(repo, &output.join("nonregular.db"));
+    fs::remove_dir(&marker).unwrap();
+
+    // No repository fields within the bounded prefix; only the data probe
+    // can prevent an optimistic fallback here.
+    fs::write(&marker, vec![b'#'; 70 * 1024]).unwrap();
+    assert_refused(repo, &output.join("oversized.db"));
+
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(&marker, b"[application]\n").unwrap();
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&marker).is_err() {
+        assert_refused(repo, &output.join("unreadable.db"));
+    }
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_file(&marker).unwrap();
+}
+
+fn padded_probe_fixture(shard_level: bool) {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let padding_dir = repo.join(if shard_level { "data/0" } else { "data" });
+    fs::create_dir_all(&padding_dir).unwrap();
+    for n in 0..300 {
+        fs::write(padding_dir.join(format!("padding-{n}")), b"padding").unwrap();
+    }
+    assert_eq!(fs::read_dir(&padding_dir).unwrap().count(), 300);
+    // Padding alone MUST refuse, proving exhaustion independently of any
+    // favorable read_dir order that might expose the segment before the cap.
+    assert_padded_fallbacks_refused(&repo, temp.path());
+
+    fs::create_dir_all(repo.join("data/0")).unwrap();
+    fs::write(repo.join("data/0/0"), tar_bytes(b"hidden segment")).unwrap();
+    // With a segment present, either definite evidence or exhaustion refuses.
+    assert_padded_fallbacks_refused(&repo, temp.path());
+}
+
+#[test]
+fn capped_data_directory_probe_refuses_all_ambiguous_config_fallbacks() {
+    padded_probe_fixture(false);
+}
+
+#[test]
+fn capped_shard_directory_probe_refuses_all_ambiguous_config_fallbacks() {
+    padded_probe_fixture(true);
 }
 
 #[test]

@@ -4,6 +4,11 @@
 //! files for the archived files they represent.  This module deliberately
 //! does not validate a repository or invoke Borg: it only recognizes enough
 //! on-disk structure to refuse confirmed or ambiguous candidates.
+//!
+//! Identity checks bracket classification; they do not fd-pin an ordinary
+//! mutable directory until later child opens. Hostile mutation after classification
+//! remains in ordinary directory sources' existing snapshot-less race model.
+//! Immutable snapshots are separate #80 work.
 
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Take};
@@ -17,7 +22,8 @@ use anyhow::{bail, Context, Result};
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 /// Directory entries examined while looking for the numeric `data/N/N`
-/// segment shape.  The probe never opens a segment file.
+/// segment shape, per directory. One extra entry detects exhaustion without
+/// inspecting its metadata. The probe never opens a segment file.
 const MAX_DATA_ENTRIES: usize = 256;
 
 /// Refuse a source if it is, or canonically resides below, a Borg candidate.
@@ -88,8 +94,15 @@ enum Candidate {
 #[derive(Debug)]
 enum DataShape {
     Absent,
-    Directory { segment_file: bool },
+    Directory { probe: DataProbe },
     Suspicious(&'static str),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DataProbe {
+    Ordinary,
+    Segment,
+    Inconclusive,
 }
 
 fn classify_directory(dir: &Path) -> Result<Candidate> {
@@ -98,18 +111,18 @@ fn classify_directory(dir: &Path) -> Result<Candidate> {
     let config_meta = match fs::symlink_metadata(&config) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return if data.has_segment_file() {
+            return if data.requires_refusal() {
                 Ok(Candidate::Borg(
-                    "Borg-shaped data segments exist but config is missing".into(),
+                    "Borg-shaped or inconclusive data probe but config is missing".into(),
                 ))
             } else {
                 Ok(Candidate::Ordinary)
             };
         }
         Err(e) => {
-            return if data.has_segment_file() {
+            return if data.requires_refusal() {
                 Ok(Candidate::Borg(format!(
-                    "Borg-shaped data segments exist but config metadata is unreadable: {e}"
+                    "Borg-shaped or inconclusive data probe but config metadata is unreadable: {e}"
                 )))
             } else {
                 Err(e).with_context(|| format!("cannot inspect '{}'", config.display()))
@@ -127,9 +140,9 @@ fn classify_directory(dir: &Path) -> Result<Candidate> {
         };
     }
     if !config_meta.is_file() {
-        return if data.has_segment_file() {
+        return if data.requires_refusal() {
             Ok(Candidate::Borg(
-                "config is not a regular file beside Borg-shaped data segments".into(),
+                "config is not a regular file beside Borg-shaped or inconclusive data".into(),
             ))
         } else {
             Ok(Candidate::Ordinary)
@@ -140,9 +153,9 @@ fn classify_directory(dir: &Path) -> Result<Candidate> {
     let (bytes, oversized) = match read {
         Ok(value) => value,
         Err(e) => {
-            return if data.has_segment_file() {
+            return if data.requires_refusal() {
                 Ok(Candidate::Borg(format!(
-                    "Borg-shaped data segments exist but config is unreadable: {e:#}"
+                    "Borg-shaped or inconclusive data probe but config is unreadable: {e:#}"
                 )))
             } else {
                 Ok(Candidate::Ordinary)
@@ -153,9 +166,9 @@ fn classify_directory(dir: &Path) -> Result<Candidate> {
     let parsed = parse_repository_section(&bytes);
     match parsed {
         RepositorySection::Absent => {
-            if oversized && data.has_segment_file() {
+            if oversized && data.requires_refusal() {
                 Ok(Candidate::Borg(
-                    "oversized config may hide a repository section beside Borg-shaped data".into(),
+                    "oversized config may hide a repository section beside Borg-shaped or inconclusive data".into(),
                 ))
             } else {
                 Ok(Candidate::Ordinary)
@@ -203,8 +216,15 @@ impl DataShape {
         !matches!(self, Self::Absent)
     }
 
-    fn has_segment_file(&self) -> bool {
-        matches!(self, Self::Directory { segment_file: true })
+    fn requires_refusal(&self) -> bool {
+        // Without a conclusive config, a capped/failed probe cannot rule out
+        // hidden segments. Conservatively refuse even padding-only data trees.
+        matches!(
+            self,
+            Self::Directory {
+                probe: DataProbe::Segment | DataProbe::Inconclusive
+            } | Self::Suspicious(_)
+        )
     }
 }
 
@@ -225,27 +245,57 @@ fn inspect_data(data: &Path) -> Result<DataShape> {
 
     let entries = fs::read_dir(data)
         .with_context(|| format!("cannot inspect data directory '{}'", data.display()))?;
-    for entry in entries.take(MAX_DATA_ENTRIES) {
-        let entry = entry
-            .with_context(|| format!("cannot inspect '{}': directory entry", data.display()))?;
+    let probe = probe_entries(entries, |entry| {
         if !decimal_name(&entry.file_name()) {
-            continue;
+            return Ok(DataProbe::Ordinary);
         }
         let meta = fs::symlink_metadata(entry.path())?;
-        if meta.file_type().is_symlink() || !meta.is_dir() {
-            continue;
+        if meta.file_type().is_symlink() {
+            return Ok(DataProbe::Inconclusive);
         }
-        for segment in fs::read_dir(entry.path())?.take(MAX_DATA_ENTRIES) {
-            let segment = segment?;
-            if decimal_name(&segment.file_name()) && fs::symlink_metadata(segment.path())?.is_file()
-            {
-                return Ok(DataShape::Directory { segment_file: true });
+        if !meta.is_dir() {
+            return Ok(DataProbe::Ordinary);
+        }
+        Ok(probe_entries(fs::read_dir(entry.path())?, |segment| {
+            if !decimal_name(&segment.file_name()) {
+                return Ok(DataProbe::Ordinary);
             }
+            let meta = fs::symlink_metadata(segment.path())?;
+            Ok(if meta.file_type().is_symlink() {
+                DataProbe::Inconclusive
+            } else if meta.is_file() {
+                DataProbe::Segment
+            } else {
+                DataProbe::Ordinary
+            })
+        }))
+    });
+    Ok(DataShape::Directory { probe })
+}
+
+fn probe_entries<T>(
+    mut entries: impl Iterator<Item = std::io::Result<T>>,
+    mut inspect: impl FnMut(T) -> std::io::Result<DataProbe>,
+) -> DataProbe {
+    for _ in 0..MAX_DATA_ENTRIES {
+        let entry = match entries.next() {
+            None => return DataProbe::Ordinary,
+            Some(Ok(entry)) => entry,
+            Some(Err(_)) => return DataProbe::Inconclusive,
+        };
+        match inspect(entry) {
+            Ok(DataProbe::Ordinary) => {}
+            Ok(probe) => return probe,
+            Err(_) => return DataProbe::Inconclusive,
         }
     }
-    Ok(DataShape::Directory {
-        segment_file: false,
-    })
+    // read_dir is unsorted: only EOF proves the bounded scan was complete.
+    // An extra entry OR iteration error means unexamined data may hide Borg.
+    if entries.next().is_some() {
+        DataProbe::Inconclusive
+    } else {
+        DataProbe::Ordinary
+    }
 }
 
 fn decimal_name(name: &std::ffi::OsStr) -> bool {
@@ -368,6 +418,57 @@ fn same_file(a: &Metadata, b: &Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_probe_requires_eof_and_inspects_at_most_the_cap() {
+        for count in [
+            0,
+            MAX_DATA_ENTRIES - 1,
+            MAX_DATA_ENTRIES,
+            MAX_DATA_ENTRIES + 1,
+        ] {
+            let mut inspected = 0;
+            let mut yielded = 0;
+            let entries = (0..count).map(|n| {
+                yielded += 1;
+                Ok(n)
+            });
+            let probe = probe_entries(entries, |_| {
+                inspected += 1;
+                Ok(DataProbe::Ordinary)
+            });
+            assert_eq!(inspected, count.min(MAX_DATA_ENTRIES));
+            assert_eq!(yielded, count);
+            assert_eq!(
+                probe,
+                if count > MAX_DATA_ENTRIES {
+                    DataProbe::Inconclusive
+                } else {
+                    DataProbe::Ordinary
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_probe_iteration_and_metadata_errors_are_inconclusive() {
+        // Include an error in the extra slot: it is not proof of EOF.
+        for error_at in [0, MAX_DATA_ENTRIES - 1, MAX_DATA_ENTRIES] {
+            let entries = (0..error_at)
+                .map(Ok)
+                .chain(std::iter::once(Err(std::io::Error::other("entry error"))));
+            assert_eq!(
+                probe_entries(entries, |_| Ok(DataProbe::Ordinary)),
+                DataProbe::Inconclusive
+            );
+        }
+        assert_eq!(
+            probe_entries(std::iter::once(Ok(())), |_| {
+                Err(std::io::Error::other("metadata error"))
+            }),
+            DataProbe::Inconclusive
+        );
+    }
 
     #[test]
     fn repository_parser_requires_exact_unique_fields() {
