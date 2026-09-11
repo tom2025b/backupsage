@@ -18,6 +18,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Borg 1.4.4
+        # #82's runtime boundary refuses anything but the exact validated
+        # capability profile (see src/borg/runtime.rs), pinned to 1.4.4 --
+        # so CI needs that exact version at /usr/bin/borg, not "whatever
+        # apt's ubuntu-latest happens to carry today".
+        run: |
+          pip install --user 'borgbackup==1.4.4'
+          borg_bin="$(python3 -m site --user-base)/bin/borg"
+          sudo ln -sf "$borg_bin" /usr/bin/borg
+          borg --version
       - name: Build
         run: cargo build --locked
       - name: Test
