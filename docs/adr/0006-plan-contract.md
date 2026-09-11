@@ -186,6 +186,55 @@ success, which is worse than refusing outright. Evidence fields (`reason` string
 refusing a whole plan because the binary does not recognize the reason a file was
 left alone is indefensible.
 
+### Live precondition verification (#76)
+
+`Plan::verify` is the single read-only gate an eventual executor must pass before
+action one. It first re-runs the document's derived and structural checks, then asks
+a caller-supplied `PlanState` adapter for current facts. No SQLite or filesystem
+writer is embedded in the contract module.
+
+For every source root, verification compares `index_uuid` and
+`index_schema_version` exactly, together with the recorded content mode, hash
+algorithms, indexed-file count and source type. A tar source additionally compares
+the complete archive BLAKE3; size and mtime remain only evidence and cheap probe
+material, never hash substitutes. A directory source continues down the declared
+per-entry path because v1 has no whole-directory fingerprint.
+
+Every distinct `SourceRef` in an action or dedup group is then checked in total
+`(root_id, file_id)` order. `file_id` only locates the candidate row: verification
+compares the row's root-relative raw path bytes and complete content hash. The lossy
+display path is used only to name a refusal to the operator. A missing row, raw-path
+disagreement or hash disagreement makes the whole plan stale.
+
+There is deliberately no production executor in this change. The ordering proof
+uses a `#[cfg(test)]` recording executor whose only effect is appending action IDs to
+an in-memory vector. Its multi-entry test makes the last entry stale and proves the
+vector is still empty, distinguishing “verification eventually failed” from
+“verification failed before action one.”
+
+### Persisted regular-file gate (#77)
+
+`Plan::load_from_regular_file` is the execution-boundary loader. The spelling `-`
+is refused as stdin. `symlink_metadata` rejects every symlink without following it,
+including a symlink to a regular file as already decided above, and rejects FIFOs,
+sockets, character/block devices and directories. After opening, the loader checks
+that the handle is still regular and, on Unix, that its device/inode identity equals
+the object inspected at the path. Only then are bytes read and delegated to the one
+existing decoder, `from_canonical_bytes`.
+
+The public byte decoder remains an in-memory constructor for compatibility and test
+use. Consequently #77's broadly worded checkbox “no API exists to apply a plan
+value that was never written to disk” is only satisfied in the narrower literal
+sense that this PR exposes no apply API at all; a future executor must accept the
+path-gated loader's result and must not expose the byte decoder as an execution
+entrypoint. This residual API-shape ambiguity is recorded rather than hidden.
+
+### No executor in this milestone
+
+This ADR now specifies loading and verification only. It does not authorize an
+`apply` function or any production filesystem action. The real executor and its
+journal remain issue #16 work; BackupSage v1.0.x stays read-only over user data.
+
 ## Alternatives considered
 
 - **Alphabetical key order via a `Value` round-trip** — evolves more gracefully but
@@ -269,9 +318,8 @@ left alone is indefensible.
 
 ## Verification
 
-25 tests in `src/plan.rs`'s `plan::contract` module (21 from the original design
-plus 4 written in response to the fresh-reader review, two per finding) cover all
-four acceptance criteria, four byte-exact golden fixtures (one per plan kind plus
+The tests in `src/plan.rs`'s `plan::contract` module cover all four acceptance
+criteria, four byte-exact golden fixtures (one per plan kind plus
 the empty-dedup case), schema validation with six negative cases, round-trip
 coverage of every tagged enum variant, hand-edited-derivation rejection,
 structural invariant rejection, the conflict-ordinal cross-cutting defect,
@@ -280,6 +328,11 @@ unsolved rename-cascade case fails closed rather than corrupting). The
 cross-process determinism criterion (acceptance criterion 2) re-execs the test
 binary itself via `std::env::current_exe()` rather than shipping a plan-emitting
 dev command, for the same #77-driven reason fixtures stay `#[cfg(test)]`-gated.
+
+The #76/#77 additions exercise unchanged-state success, each stale source/entry
+precondition, the last-entry-before-action-one ordering proof, and regular-file,
+stdin, FIFO, socket, character-device and symlink sources. The recording executor
+and every special-file fixture constructor are test-only.
 
 Every determinism guard is mutation-proven through `failure-atlas`, two ways per
 guard, per the standing rule that one `caught` verdict proves a test noticed *that*

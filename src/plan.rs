@@ -54,6 +54,9 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 
 /// This document's own contract version. Independent of the index schema
 /// (`store::SCHEMA_VERSION`, currently 3) and of the dedup report's
@@ -63,6 +66,38 @@ pub const PLAN_SCHEMA_VERSION: u32 = 1;
 const DOMAIN_ACTION: &[u8] = b"backupsage.plan.v1.action\0";
 const DOMAIN_GROUP: &[u8] = b"backupsage.plan.v1.group\0";
 const DOMAIN_SLOT: &[u8] = b"backupsage.plan.v1.slot\0";
+
+/// Live, read-only source facts used by [`Plan::verify`]. The archive digest
+/// uses the plan spelling (`b3:<64 lowercase hex>`); directory sources report
+/// `None` because v1 has no whole-directory fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSource {
+    pub index_uuid: String,
+    pub index_schema_version: i64,
+    pub content_mode: ContentMode,
+    pub hash_algo: String,
+    pub phash_algo: String,
+    pub files_indexed: u64,
+    pub source_type: SourceType,
+    pub archive_blake3: Option<String>,
+}
+
+/// Live, read-only entry identity returned by [`PlanState`]. `path_raw` is
+/// root-relative and authoritative; `file_id` is only the lookup probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveEntry {
+    pub path_raw: Vec<u8>,
+    pub content_hash: String,
+}
+
+/// Read-only adapter between a plan and the currently reachable indexes.
+/// Implementations may query SQLite and hash archives, but must not mutate
+/// user data. An executor must call [`Plan::verify`] successfully before it
+/// performs action one.
+pub trait PlanState {
+    fn source(&mut self, root: &Root) -> Result<LiveSource>;
+    fn entry(&mut self, root: &Root, file_id: i64) -> Result<Option<LiveEntry>>;
+}
 
 // ── The document ────────────────────────────────────────────────────────
 
@@ -741,7 +776,7 @@ impl Plan {
                 .push(ei);
         }
 
-        for (_, member_indices) in groups.iter() {
+        for member_indices in groups.values() {
             let mut ranked: Vec<usize> = member_indices.clone();
             ranked.sort_by(|&a, &b| entries[a].rank_key.cmp(&entries[b].rank_key));
 
@@ -1116,9 +1151,9 @@ impl Plan {
     }
 
     /// The ONLY way bytes become a plan. #77's "apply accepts only a
-    /// persisted regular file" holds because there is no other constructor
-    /// and the caller must already have proved the source is one — no API
-    /// applies a `Plan` value that was never written to disk.
+    /// persisted regular file" is enforced by [`Plan::load_from_regular_file`]
+    /// at the execution boundary. This lower-level decoder remains useful for
+    /// fixture and compatibility checks, but must never be an apply surface.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self> {
         let plan: Plan = serde_json::from_slice(bytes)
             .context("plan document is not valid JSON for this contract")?;
@@ -1134,6 +1169,228 @@ impl Plan {
         Ok(plan)
     }
 
+    /// Load a plan only from a path naming the same persisted regular file
+    /// before and after open. `-`, symlinks (including symlinks to regular
+    /// files), FIFOs, sockets, devices and directories are refused before any
+    /// bytes reach [`Plan::from_canonical_bytes`].
+    pub fn load_from_regular_file(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if path == Path::new("-") {
+            bail!("stdin ('-') is not a persisted regular plan file; refusing");
+        }
+
+        let path_metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("cannot inspect plan path {}", path.display()))?;
+        let path_type = path_metadata.file_type();
+        if path_type.is_symlink() {
+            bail!(
+                "plan path {} is a symlink, not a persisted regular file; refusing",
+                path.display()
+            );
+        }
+        if !path_type.is_file() {
+            bail!(
+                "plan path {} is {}, not a persisted regular file; refusing",
+                path.display(),
+                file_type_name(&path_type)
+            );
+        }
+
+        let mut file = File::open(path)
+            .with_context(|| format!("cannot open plan file {}", path.display()))?;
+        let opened_metadata = file
+            .metadata()
+            .with_context(|| format!("cannot inspect opened plan file {}", path.display()))?;
+        if !opened_metadata.file_type().is_file() {
+            bail!(
+                "opened plan path {} is not a regular file; refusing",
+                path.display()
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if path_metadata.dev() != opened_metadata.dev()
+                || path_metadata.ino() != opened_metadata.ino()
+            {
+                bail!(
+                    "plan path {} changed between inspection and open; refusing",
+                    path.display()
+                );
+            }
+        }
+
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .with_context(|| format!("cannot read plan file {}", path.display()))?;
+        Self::from_canonical_bytes(&bytes)
+            .with_context(|| format!("invalid plan file {}", path.display()))
+    }
+
+    /// Verify every live precondition before an executor is allowed to
+    /// perform action one. This method only reads through `state`; it does not
+    /// execute, stage, move, copy, create or delete anything.
+    pub fn verify(&self, state: &mut impl PlanState) -> Result<()> {
+        self.verify_derived()?;
+        self.invariants_hold()?;
+
+        for root in &self.roots {
+            let Some(expected) = &root.source else {
+                continue;
+            };
+            let live = state.source(root).with_context(|| {
+                format!(
+                    "cannot verify source root {} ({})",
+                    root.root_id, root.path_display
+                )
+            })?;
+
+            if live.index_uuid != expected.index_uuid {
+                bail!(
+                    "source root {} ({}) index_uuid changed: plan {}, live {}; refusing stale plan",
+                    root.root_id,
+                    root.path_display,
+                    expected.index_uuid,
+                    live.index_uuid
+                );
+            }
+            if live.index_schema_version != expected.index_schema_version {
+                bail!(
+                    "source root {} ({}) index_schema_version changed: plan {}, live {}; refusing stale plan",
+                    root.root_id,
+                    root.path_display,
+                    expected.index_schema_version,
+                    live.index_schema_version
+                );
+            }
+            if live.content_mode != expected.content_mode {
+                bail!(
+                    "source root {} ({}) content_mode changed; refusing stale plan",
+                    root.root_id,
+                    root.path_display
+                );
+            }
+            if live.hash_algo != expected.hash_algo {
+                bail!(
+                    "source root {} ({}) hash_algo changed: plan {}, live {}; refusing stale plan",
+                    root.root_id,
+                    root.path_display,
+                    expected.hash_algo,
+                    live.hash_algo
+                );
+            }
+            if live.phash_algo != expected.phash_algo {
+                bail!(
+                    "source root {} ({}) phash_algo changed: plan {}, live {}; refusing stale plan",
+                    root.root_id,
+                    root.path_display,
+                    expected.phash_algo,
+                    live.phash_algo
+                );
+            }
+            if live.files_indexed != expected.files_indexed {
+                bail!(
+                    "source root {} ({}) files_indexed changed: plan {}, live {}; refusing stale plan",
+                    root.root_id,
+                    root.path_display,
+                    expected.files_indexed,
+                    live.files_indexed
+                );
+            }
+            if live.source_type != expected.source_type {
+                bail!(
+                    "source root {} ({}) source_type changed; refusing stale plan",
+                    root.root_id,
+                    root.path_display
+                );
+            }
+
+            match &expected.fingerprint {
+                Fingerprint::ArchiveBlake3 { value, .. } => {
+                    if live.archive_blake3.as_deref() != Some(value.as_str()) {
+                        bail!(
+                            "source root {} ({}) archive BLAKE3 changed: plan {}, live {}; refusing stale plan",
+                            root.root_id,
+                            root.path_display,
+                            value,
+                            live.archive_blake3.as_deref().unwrap_or("missing")
+                        );
+                    }
+                }
+                Fingerprint::None { .. } => {
+                    if live.archive_blake3.is_some() {
+                        bail!(
+                            "source root {} ({}) unexpectedly acquired an archive BLAKE3; refusing stale plan",
+                            root.root_id,
+                            root.path_display
+                        );
+                    }
+                }
+            }
+        }
+
+        let entries = self.referenced_entries()?;
+        for (key, expected) in entries {
+            let root = self
+                .roots
+                .iter()
+                .find(|root| root.root_id == key.root_id)
+                .context("verified entry references an unknown source root")?;
+            let live = state
+                .entry(root, key.file_id)
+                .with_context(|| {
+                    format!(
+                        "cannot verify entry {} (root_id {}, file_id {})",
+                        expected.display, key.root_id, key.file_id
+                    )
+                })?
+                .with_context(|| {
+                    format!(
+                        "entry {} (root_id {}, file_id {}) is missing; refusing stale plan",
+                        expected.display, key.root_id, key.file_id
+                    )
+                })?;
+            let expected_path = expected.raw_path()?;
+            if live.path_raw != expected_path {
+                bail!(
+                    "entry {} (root_id {}, file_id {}) raw path changed; refusing stale plan",
+                    expected.display,
+                    key.root_id,
+                    key.file_id
+                );
+            }
+            if live.content_hash != expected.content_hash {
+                bail!(
+                    "entry {} (root_id {}, file_id {}) content_hash changed: plan {}, live {}; refusing stale plan",
+                    expected.display,
+                    key.root_id,
+                    key.file_id,
+                    expected.content_hash,
+                    live.content_hash
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn referenced_entries(&self) -> Result<BTreeMap<EntryKey, &SourceRef>> {
+        let mut entries = BTreeMap::new();
+        for action in &self.actions {
+            if let Some(source) = action.op.source() {
+                insert_referenced_entry(&mut entries, source)?;
+            }
+        }
+        for group in &self.groups {
+            insert_referenced_entry(&mut entries, &group.keeper.entry)?;
+            for member in &group.members {
+                insert_referenced_entry(&mut entries, &member.entry)?;
+            }
+        }
+        Ok(entries)
+    }
+
     /// The plan's identity: blake3 of the file AS IT LIES. Derived, never
     /// stored in the document — a digest a plan computes over itself needs an
     /// excluded region and protects nothing against an editor who can
@@ -1144,6 +1401,45 @@ impl Plan {
             crate::report::to_hex(blake3::hash(file_bytes).as_bytes())
         )
     }
+}
+
+fn insert_referenced_entry<'a>(
+    entries: &mut BTreeMap<EntryKey, &'a SourceRef>,
+    entry: &'a SourceRef,
+) -> Result<()> {
+    if let Some(prior) = entries.insert(entry.key(), entry) {
+        if prior != entry {
+            bail!(
+                "entry root_id {} file_id {} has contradictory plan facts",
+                entry.root_id,
+                entry.file_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn file_type_name(file_type: &std::fs::FileType) -> &'static str {
+    if file_type.is_dir() {
+        return "a directory";
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if file_type.is_fifo() {
+            return "a FIFO";
+        }
+        if file_type.is_socket() {
+            return "a socket";
+        }
+        if file_type.is_char_device() {
+            return "a character device";
+        }
+        if file_type.is_block_device() {
+            return "a block device";
+        }
+    }
+    "not a regular file"
 }
 
 // ── Derivation helpers ────────────────────────────────────────────────────
@@ -2008,6 +2304,99 @@ mod contract {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    struct FakeState {
+        sources: BTreeMap<u32, LiveSource>,
+        entries: BTreeMap<EntryKey, LiveEntry>,
+        entry_queries: Vec<EntryKey>,
+    }
+
+    impl FakeState {
+        fn from_plan(plan: &Plan) -> Self {
+            let sources = plan
+                .roots
+                .iter()
+                .filter_map(|root| {
+                    root.source.as_ref().map(|source| {
+                        let archive_blake3 = match &source.fingerprint {
+                            Fingerprint::ArchiveBlake3 { value, .. } => Some(value.clone()),
+                            Fingerprint::None { .. } => None,
+                        };
+                        (
+                            root.root_id,
+                            LiveSource {
+                                index_uuid: source.index_uuid.clone(),
+                                index_schema_version: source.index_schema_version,
+                                content_mode: source.content_mode,
+                                hash_algo: source.hash_algo.clone(),
+                                phash_algo: source.phash_algo.clone(),
+                                files_indexed: source.files_indexed,
+                                source_type: source.source_type,
+                                archive_blake3,
+                            },
+                        )
+                    })
+                })
+                .collect();
+            let entries = plan
+                .referenced_entries()
+                .expect("fixture references are consistent")
+                .into_iter()
+                .map(|(key, entry)| {
+                    (
+                        key,
+                        LiveEntry {
+                            path_raw: entry.raw_path().expect("fixture raw path is valid"),
+                            content_hash: entry.content_hash.clone(),
+                        },
+                    )
+                })
+                .collect();
+            Self {
+                sources,
+                entries,
+                entry_queries: Vec::new(),
+            }
+        }
+    }
+
+    impl PlanState for FakeState {
+        fn source(&mut self, root: &Root) -> Result<LiveSource> {
+            self.sources
+                .get(&root.root_id)
+                .cloned()
+                .with_context(|| format!("missing fake source root {}", root.root_id))
+        }
+
+        fn entry(&mut self, root: &Root, file_id: i64) -> Result<Option<LiveEntry>> {
+            let key = EntryKey {
+                root_id: root.root_id,
+                file_id,
+            };
+            self.entry_queries.push(key);
+            Ok(self.entries.get(&key).cloned())
+        }
+    }
+
+    /// Test-harness-only stand-in for the future #16 executor. It records an
+    /// invocation for every action but has no filesystem behavior.
+    #[derive(Default)]
+    struct RecordingExecutor {
+        invocations: Vec<String>,
+    }
+
+    impl RecordingExecutor {
+        fn run_after_verification(
+            &mut self,
+            plan: &Plan,
+            state: &mut impl PlanState,
+        ) -> Result<()> {
+            plan.verify(state)?;
+            self.invocations
+                .extend(plan.actions.iter().map(|action| action.action_id.clone()));
+            Ok(())
+        }
+    }
 
     fn fixture_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plan")
@@ -3098,5 +3487,193 @@ mod contract {
             p.invariants_hold().is_err(),
             "a tar source claiming no fingerprint must be refused"
         );
+    }
+
+    #[test]
+    fn verify_accepts_unchanged_live_state_for_every_plan_kind() {
+        for plan in [organize_sample(), extract_sample(), dedup_sample()] {
+            let mut state = FakeState::from_plan(&plan);
+            plan.verify(&mut state)
+                .expect("unchanged live inputs must verify");
+            assert_eq!(
+                state.entry_queries.len(),
+                plan.referenced_entries().unwrap().len(),
+                "every distinct referenced entry must be checked"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_refuses_a_different_index_uuid() {
+        let plan = organize_sample();
+        let mut state = FakeState::from_plan(&plan);
+        state.sources.values_mut().next().unwrap().index_uuid =
+            "00000000000000000000000000000000".to_string();
+
+        let error = plan.verify(&mut state).unwrap_err().to_string();
+        assert!(error.contains("index_uuid changed"), "wrong error: {error}");
+    }
+
+    #[test]
+    fn verify_refuses_a_changed_index_schema_version() {
+        let plan = organize_sample();
+        let mut state = FakeState::from_plan(&plan);
+        state
+            .sources
+            .values_mut()
+            .next()
+            .unwrap()
+            .index_schema_version += 1;
+
+        let error = plan.verify(&mut state).unwrap_err().to_string();
+        assert!(
+            error.contains("index_schema_version changed"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn verify_refuses_a_changed_archive_blake3() {
+        let plan = extract_sample();
+        let mut state = FakeState::from_plan(&plan);
+        state
+            .sources
+            .values_mut()
+            .find(|source| source.archive_blake3.is_some())
+            .unwrap()
+            .archive_blake3 = Some(format!(
+            "b3:{}",
+            crate::report::to_hex(blake3::hash(b"changed archive").as_bytes())
+        ));
+
+        let error = plan.verify(&mut state).unwrap_err().to_string();
+        assert!(
+            error.contains("archive BLAKE3 changed"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn stale_last_entry_is_refused_before_recording_action_one() {
+        let plan = organize_sample();
+        let mut state = FakeState::from_plan(&plan);
+        assert!(state.entries.len() > 1, "test needs multiple live entries");
+        let stale_key = *state.entries.keys().next_back().unwrap();
+        let stale_display = plan
+            .referenced_entries()
+            .unwrap()
+            .get(&stale_key)
+            .unwrap()
+            .display
+            .clone();
+        state.entries.get_mut(&stale_key).unwrap().content_hash = format!(
+            "b3:{}",
+            crate::report::to_hex(blake3::hash(b"changed last entry").as_bytes())
+        );
+        let mut recorder = RecordingExecutor::default();
+
+        let error = recorder
+            .run_after_verification(&plan, &mut state)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("content_hash changed"),
+            "wrong error: {error}"
+        );
+        assert!(
+            error.contains(&stale_display),
+            "error must name the stale entry {stale_display}: {error}"
+        );
+        assert_eq!(
+            state.entry_queries.last(),
+            Some(&stale_key),
+            "the stale entry must be the last live entry checked"
+        );
+        assert!(
+            recorder.invocations.is_empty(),
+            "a late verification failure must happen before action one"
+        );
+    }
+
+    #[test]
+    fn verify_uses_raw_path_bytes_not_the_lossy_display() {
+        let plan = organize_sample();
+        let mut state = FakeState::from_plan(&plan);
+        let key = *state.entries.keys().next().unwrap();
+        state.entries.get_mut(&key).unwrap().path_raw.push(b'x');
+
+        let error = plan.verify(&mut state).unwrap_err().to_string();
+        assert!(error.contains("raw path changed"), "wrong error: {error}");
+    }
+
+    #[test]
+    fn load_from_regular_file_accepts_a_persisted_plan_and_refuses_stdin() {
+        let plan = organize_sample();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("reviewed-plan.json");
+        std::fs::write(&path, plan.to_canonical_bytes().unwrap()).unwrap();
+
+        let loaded = Plan::load_from_regular_file(&path).unwrap();
+        assert_eq!(loaded, plan);
+
+        let error = Plan::load_from_regular_file("-").unwrap_err().to_string();
+        assert!(error.contains("stdin"), "wrong error: {error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_from_regular_file_refuses_fifo_socket_and_character_device() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = tempfile::tempdir().unwrap();
+        let fifo = temp.path().join("plan.fifo");
+        let status = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(status.success(), "mkfifo must create the refusal fixture");
+        let error = Plan::load_from_regular_file(&fifo).unwrap_err().to_string();
+        assert!(error.contains("FIFO"), "wrong error: {error}");
+
+        let socket = temp.path().join("plan.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let error = Plan::load_from_regular_file(&socket)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("socket"), "wrong error: {error}");
+
+        let error = Plan::load_from_regular_file("/dev/null")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("character device"), "wrong error: {error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_from_regular_file_refuses_symlinks_to_every_source_kind() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+
+        let plan = organize_sample();
+        let temp = tempfile::tempdir().unwrap();
+        let regular = temp.path().join("reviewed-plan.json");
+        std::fs::write(&regular, plan.to_canonical_bytes().unwrap()).unwrap();
+        let fifo = temp.path().join("plan.fifo");
+        assert!(Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        let socket = temp.path().join("plan.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+
+        for (name, target) in [
+            ("regular-link", regular.as_path()),
+            ("fifo-link", fifo.as_path()),
+            ("socket-link", socket.as_path()),
+            ("character-link", Path::new("/dev/null")),
+        ] {
+            let link = temp.path().join(name);
+            symlink(target, &link).unwrap();
+            let error = Plan::load_from_regular_file(&link).unwrap_err().to_string();
+            assert!(error.contains("symlink"), "wrong error for {name}: {error}");
+        }
     }
 }
