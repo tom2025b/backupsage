@@ -4,6 +4,8 @@
 //! arguments and renders output.
 
 pub mod cli;
+#[cfg(target_os = "linux")]
+pub mod borg;
 pub mod dedup;
 pub mod exif_date;
 pub mod format;
