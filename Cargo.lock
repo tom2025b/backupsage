@@ -212,6 +212,7 @@ dependencies = [
  "indicatif",
  "jsonschema",
  "kamadak-exif",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",
