@@ -3,6 +3,7 @@
 //! Split into a library so the pipeline is testable; `main.rs` only parses
 //! arguments and renders output.
 
+mod borg_guard;
 pub mod cli;
 pub mod dedup;
 pub mod exif_date;
