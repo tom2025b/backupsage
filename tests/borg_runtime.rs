@@ -46,6 +46,9 @@ fn private_state_real_modes_persistence_and_no_clobber() {
     let d = tempfile::tempdir().unwrap();
     let keys = d.path().join("keys");
     fs::create_dir(&keys).unwrap();
+    let key = keys.join("synthetic-key");
+    fs::write(&key, b"synthetic key input").unwrap();
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o400)).unwrap();
     fs::set_permissions(&keys, fs::Permissions::from_mode(0o500)).unwrap();
     let root = d.path().join("state");
     let db = d.path().join("index.db");
@@ -71,6 +74,14 @@ fn private_state_real_modes_persistence_and_no_clobber() {
         0o600
     );
     assert_eq!(fs::read(root.join("base/marker")).unwrap(), b"metadata");
+    assert_eq!(
+        fs::metadata(&keys).unwrap().permissions().mode() & 0o7777,
+        0o500
+    );
+    assert_eq!(
+        fs::metadata(&key).unwrap().permissions().mode() & 0o7777,
+        0o400
+    );
 }
 
 #[test]

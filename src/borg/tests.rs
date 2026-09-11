@@ -234,10 +234,12 @@ fn fake_run(
 ) -> Result<()> {
     let cap = MockBackend.validate(&f.source).unwrap();
     process::run(
-        &fake(f, scenario),
-        &Operation::repository_metadata(&cap).argv(),
+        process::Invocation {
+            executable: &fake(f, scenario),
+            argv: &Operation::repository_metadata(&cap).argv(),
+            pin: cap.pin(),
+        },
         &f.env(false),
-        cap.pin(),
         limits,
         cancellation,
         limits.listing_bytes as u64,

@@ -91,10 +91,12 @@ impl Runtime {
         op.snapshot.revalidate()?;
         let remaining = remaining(limits, started)?;
         let result = process::run(
-            Path::new("/usr/bin/borg"),
-            &op.argv(),
+            process::Invocation {
+                executable: Path::new("/usr/bin/borg"),
+                argv: &op.argv(),
+                pin: op.snapshot.pin(),
+            },
             env,
-            op.snapshot.pin(),
             &remaining,
             cancel,
             if op.is_extract() {
@@ -140,10 +142,12 @@ impl Runtime {
             op.snapshot.revalidate()?;
             let remaining = remaining(limits, started)?;
             process::run(
-                Path::new("/usr/bin/borg"),
-                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                process::Invocation {
+                    executable: Path::new("/usr/bin/borg"),
+                    argv: &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                    pin: op.snapshot.pin(),
+                },
                 env,
-                op.snapshot.pin(),
                 &remaining,
                 cancel,
                 128 * 1024,

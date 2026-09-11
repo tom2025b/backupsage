@@ -180,19 +180,30 @@ unsafe fn supervise(
     }
 }
 
+// Internal transport input; only Runtime's fixed profiles reach this in a
+// production build. The fake executable seam exists solely in unit tests.
+pub(super) struct Invocation<'a> {
+    pub executable: &'a std::path::Path,
+    pub argv: &'a [String],
+    pub pin: &'a File,
+}
+
 /// Callback sees stdout only, in <=64KiB chunks, and must return promptly.
 /// Returning Err aborts/reaps; panic unwinding also triggers supervisor Drop.
 /// Raw stderr is concurrently drained/discarded and never becomes an error.
 pub(super) fn run(
-    executable: &std::path::Path,
-    argv: &[String],
+    invocation: Invocation<'_>,
     environment: &super::BorgEnvironment<'_>,
-    pin: &File,
     limits: &Limits,
     cancel: &Cancellation,
     stdout_limit: u64,
     consume: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
+    let Invocation {
+        executable,
+        argv,
+        pin,
+    } = invocation;
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
