@@ -3,6 +3,8 @@
 //! Split into a library so the pipeline is testable; `main.rs` only parses
 //! arguments and renders output.
 
+#[cfg(target_os = "linux")]
+pub mod borg;
 mod borg_guard;
 pub mod cli;
 pub mod dedup;

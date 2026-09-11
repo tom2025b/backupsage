@@ -18,6 +18,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Borg 1.4.4
+        # #82's runtime boundary refuses anything but the exact validated
+        # capability profile (see src/borg/runtime.rs), pinned to 1.4.4 --
+        # so CI needs that exact version at /usr/bin/borg. Confirmed apt on
+        # ubuntu-latest (noble) only carries 1.2.8, so build 1.4.4 from
+        # source via pip; it needs libxxhash/liblz4/libzstd/libssl/libacl
+        # headers and pkg-config present first.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxxhash-dev liblz4-dev libzstd-dev \
+            libssl-dev libacl1-dev pkg-config
+          pip install --user 'borgbackup==1.4.4'
+          borg_bin="$(python3 -m site --user-base)/bin/borg"
+          sudo ln -sf "$borg_bin" /usr/bin/borg
+          got="$(borg --version)"
+          if [ "$got" != "borg 1.4.4" ]; then
+            echo "::error::installed '$got', not 'borg 1.4.4'"
+            exit 1
+          fi
       - name: Build
         run: cargo build --locked
       - name: Test
