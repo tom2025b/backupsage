@@ -1,0 +1,204 @@
+{
+  "plan_schema_version": 1,
+  "kind": "dedup",
+  "policy": {
+    "for": "dedup",
+    "match_kinds": [
+      "exact"
+    ],
+    "near_threshold": 0,
+    "min_size": 1,
+    "include_empty": false,
+    "across_only": false,
+    "replica_floor": 2,
+    "keep_policy": "newest"
+  },
+  "roots": [
+    {
+      "root_id": 0,
+      "role": "source",
+      "path_display": "/plans/src/alpha.tar",
+      "path_raw": "2f706c616e732f7372632f616c7068612e746172",
+      "source": {
+        "label": "alpha",
+        "index_uuid": "91f907ba37e4789627d5419abdf94dbb",
+        "index_schema_version": 3,
+        "content_mode": "full",
+        "hash_algo": "blake3",
+        "phash_algo": "sage-dct-v1",
+        "files_indexed": 3,
+        "source_type": "tar",
+        "fingerprint": {
+          "kind": "archive_blake3",
+          "value": "b3:a4a95edd7b3f39cc01d1b05dc36bc5a500d8cb7bb15b2942ec7933303f48ace2",
+          "size": 102400,
+          "mtime_unix": 1600000000
+        }
+      }
+    },
+    {
+      "root_id": 1,
+      "role": "source",
+      "path_display": "/plans/src/beta.tar",
+      "path_raw": "2f706c616e732f7372632f626574612e746172",
+      "source": {
+        "label": "beta",
+        "index_uuid": "804916a1617f532a173efa4f5dd2e120",
+        "index_schema_version": 3,
+        "content_mode": "full",
+        "hash_algo": "blake3",
+        "phash_algo": "sage-dct-v1",
+        "files_indexed": 3,
+        "source_type": "tar",
+        "fingerprint": {
+          "kind": "archive_blake3",
+          "value": "b3:4b03db4af2eb035bdec51632ebf1523b2bfb09e4af330c8b8ffc9bb9ac817ee2",
+          "size": 102400,
+          "mtime_unix": 1600000000
+        }
+      }
+    },
+    {
+      "root_id": 2,
+      "role": "quarantine",
+      "path_display": "/plans/quarantine",
+      "path_raw": "2f706c616e732f71756172616e74696e65",
+      "source": null
+    }
+  ],
+  "actions": [
+    {
+      "action_id": "07c46f94ea2e896455124f9edc4f8510",
+      "ordinal": 0,
+      "op": {
+        "action": "mkdir",
+        "dest": {
+          "root_id": 2,
+          "parts_raw": [
+            "672d32653532656262323939343539393964"
+          ],
+          "display": "g-2e52ebb29945999d"
+        }
+      }
+    },
+    {
+      "action_id": "7a1143c6a200eabaf74b766e28f62420",
+      "ordinal": 1,
+      "op": {
+        "action": "quarantine",
+        "source": {
+          "root_id": 1,
+          "file_id": 31,
+          "parts_raw": [
+            "70686f746f2d636f70792e6a7067"
+          ],
+          "display": "photo-copy.jpg",
+          "content_hash": "b3:17fc17dd3ae5eca42b9b74b1dd939076ef601eaf89362ea83b7bf7a4b2f8a900",
+          "size": 4096,
+          "mtime_unix": 1500000100
+        },
+        "dest": {
+          "root_id": 2,
+          "parts_raw": [
+            "672d32653532656262323939343539393964",
+            "3539386332653163",
+            "70686f746f2d636f70792e6a7067"
+          ],
+          "display": "g-2e52ebb29945999d/598c2e1c/photo-copy.jpg"
+        },
+        "group_id": "2e52ebb29945999d",
+        "slot": "598c2e1c"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "group_id": "2e52ebb29945999d",
+      "match_kind": "exact",
+      "max_distance": 0,
+      "keeper": {
+        "entry": {
+          "root_id": 0,
+          "file_id": 30,
+          "parts_raw": [
+            "70686f746f2e6a7067"
+          ],
+          "display": "photo.jpg",
+          "content_hash": "b3:17fc17dd3ae5eca42b9b74b1dd939076ef601eaf89362ea83b7bf7a4b2f8a900",
+          "size": 4096,
+          "mtime_unix": 1500000000
+        },
+        "reason": "newest"
+      },
+      "members": [
+        {
+          "entry": {
+            "root_id": 1,
+            "file_id": 31,
+            "parts_raw": [
+              "70686f746f2d636f70792e6a7067"
+            ],
+            "display": "photo-copy.jpg",
+            "content_hash": "b3:17fc17dd3ae5eca42b9b74b1dd939076ef601eaf89362ea83b7bf7a4b2f8a900",
+            "size": 4096,
+            "mtime_unix": 1500000100
+          },
+          "disposition": "quarantine",
+          "reason": "actionable-duplicate",
+          "actionable": true,
+          "hamming_to_keep": 0,
+          "shadowed": false,
+          "sparse": false
+        },
+        {
+          "entry": {
+            "root_id": 1,
+            "file_id": 32,
+            "parts_raw": [
+              "70686f746f2d6564697465642e6a7067"
+            ],
+            "display": "photo-edited.jpg",
+            "content_hash": "b3:17fc17dd3ae5eca42b9b74b1dd939076ef601eaf89362ea83b7bf7a4b2f8a900",
+            "size": 4096,
+            "mtime_unix": 1500000200
+          },
+          "disposition": "leave",
+          "reason": "transitive-only",
+          "actionable": false,
+          "hamming_to_keep": 0,
+          "shadowed": false,
+          "sparse": false
+        }
+      ],
+      "replica_floor": {
+        "required": 2,
+        "observed": 2,
+        "remaining_after": 2,
+        "counted_scope": "registered_reachable_archives"
+      },
+      "reclaimable_bytes": 4096,
+      "review_only_bytes": 0
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "actions_total": 2,
+    "actions_by_op": [
+      {
+        "op": "mkdir",
+        "count": 1
+      },
+      {
+        "op": "quarantine",
+        "count": 1
+      }
+    ],
+    "bytes_affected": 4096,
+    "groups_total": 1,
+    "excluded_total": 0,
+    "excluded_bytes": 0,
+    "roots_written": [
+      2
+    ]
+  }
+}

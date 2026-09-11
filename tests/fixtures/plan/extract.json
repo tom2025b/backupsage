@@ -1,0 +1,137 @@
+{
+  "plan_schema_version": 1,
+  "kind": "extract",
+  "policy": {
+    "for": "extract",
+    "selection": "all"
+  },
+  "roots": [
+    {
+      "root_id": 0,
+      "role": "source",
+      "path_display": "/plans/src/backup.tar",
+      "path_raw": "2f706c616e732f7372632f6261636b75702e746172",
+      "source": {
+        "label": "backup",
+        "index_uuid": "4e4eb194f2356a60f51f25b88516aaa8",
+        "index_schema_version": 3,
+        "content_mode": "full",
+        "hash_algo": "blake3",
+        "phash_algo": "sage-dct-v1",
+        "files_indexed": 2,
+        "source_type": "tar",
+        "fingerprint": {
+          "kind": "archive_blake3",
+          "value": "b3:efead19c8c4095e7069386a04f9b836b0e8e6e1055656b4bcb984bb8cea81b30",
+          "size": 204800,
+          "mtime_unix": 1600000000
+        }
+      }
+    },
+    {
+      "root_id": 1,
+      "role": "destination",
+      "path_display": "/plans/dest",
+      "path_raw": "2f706c616e732f64657374",
+      "source": null
+    }
+  ],
+  "actions": [
+    {
+      "action_id": "c79cbcee82fd7f9a4a391f9a06016d3b",
+      "ordinal": 0,
+      "op": {
+        "action": "mkdir",
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "646f6373"
+          ],
+          "display": "docs"
+        }
+      }
+    },
+    {
+      "action_id": "8050b2b715c9e2f72b0012ab2ec3fa8b",
+      "ordinal": 1,
+      "op": {
+        "action": "extract",
+        "source": {
+          "root_id": 0,
+          "file_id": 20,
+          "parts_raw": [
+            "646f6373",
+            "726561646d652e747874"
+          ],
+          "display": "docs/readme.txt",
+          "content_hash": "b3:c839d9c6617619f2f0fadab4812f793aac31d101e230e3d127d64bb5d3e28fef",
+          "size": 512,
+          "mtime_unix": 1500000000
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "646f6373",
+            "726561646d652e747874"
+          ],
+          "display": "docs/readme.txt"
+        },
+        "conflict": {
+          "rule": "none"
+        }
+      }
+    },
+    {
+      "action_id": "0ff005cc8dae11d067eb7844d99ae254",
+      "ordinal": 2,
+      "op": {
+        "action": "extract",
+        "source": {
+          "root_id": 0,
+          "file_id": 21,
+          "parts_raw": [
+            "646f6373",
+            "6e6f7465732e747874"
+          ],
+          "display": "docs/notes.txt",
+          "content_hash": "b3:045147f4bcf89f21b9184f79a5f9d162f8726a9077922b75f21eeeca339d87a7",
+          "size": 256,
+          "mtime_unix": 1500000100
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "646f6373",
+            "6e6f7465732e747874"
+          ],
+          "display": "docs/notes.txt"
+        },
+        "conflict": {
+          "rule": "none"
+        }
+      }
+    }
+  ],
+  "groups": [],
+  "excluded": [],
+  "summary": {
+    "actions_total": 3,
+    "actions_by_op": [
+      {
+        "op": "extract",
+        "count": 2
+      },
+      {
+        "op": "mkdir",
+        "count": 1
+      }
+    ],
+    "bytes_affected": 768,
+    "groups_total": 0,
+    "excluded_total": 0,
+    "excluded_bytes": 0,
+    "roots_written": [
+      1
+    ]
+  }
+}
