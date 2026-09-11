@@ -8,3 +8,4 @@
 | [0004](0004-keeper-star-actionable-groups.md) | Keeper-star actionable classification for near-duplicate groups | accepted | 2026-08-02 |
 | [0005](0005-content-mode-registry.md) | content_mode as a replicated fact, not a per-surface re-derivation | accepted | 2026-08-13 |
 | [0006](0006-plan-contract.md) | Immutable action-plan canonicalization and identity | accepted | 2026-08-28 |
+| [0007](0007-borg-source.md) | Borg sources require immutable snapshots and sealed reads | accepted | 2026-09-11 |
