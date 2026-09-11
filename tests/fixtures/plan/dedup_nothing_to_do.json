@@ -1,0 +1,65 @@
+{
+  "plan_schema_version": 1,
+  "kind": "dedup",
+  "policy": {
+    "for": "dedup",
+    "match_kinds": [
+      "exact"
+    ],
+    "near_threshold": 0,
+    "min_size": 1000000,
+    "include_empty": false,
+    "across_only": false,
+    "replica_floor": 2,
+    "keep_policy": "newest"
+  },
+  "roots": [
+    {
+      "root_id": 0,
+      "role": "source",
+      "path_display": "/plans/src/solo.tar",
+      "path_raw": "2f706c616e732f7372632f736f6c6f2e746172",
+      "source": {
+        "label": "solo",
+        "index_uuid": "2d9047eec280362c9762020b1716cb29",
+        "index_schema_version": 3,
+        "content_mode": "full",
+        "hash_algo": "blake3",
+        "phash_algo": "sage-dct-v1",
+        "files_indexed": 1,
+        "source_type": "tar",
+        "fingerprint": {
+          "kind": "archive_blake3",
+          "value": "b3:1e8558f08b7c221de03f9244314b345e6a35477663d158ba96c0e1fea5b1e5e7",
+          "size": 4096,
+          "mtime_unix": 1600000000
+        }
+      }
+    }
+  ],
+  "actions": [],
+  "groups": [],
+  "excluded": [
+    {
+      "root_id": 0,
+      "file_id": 40,
+      "parts_raw": [
+        "6f6e6c792e6a7067"
+      ],
+      "display": "only.jpg",
+      "content_hash": "b3:7e7c0f44cf8cdba92007dc91d5b3b58aec0099450d0e1d8b2e9f7c6122f1ede6",
+      "size": 4096,
+      "mtime_unix": 1500000000,
+      "reason": "below_min_size"
+    }
+  ],
+  "summary": {
+    "actions_total": 0,
+    "actions_by_op": [],
+    "bytes_affected": 0,
+    "groups_total": 0,
+    "excluded_total": 1,
+    "excluded_bytes": 4096,
+    "roots_written": []
+  }
+}

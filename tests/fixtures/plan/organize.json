@@ -1,0 +1,269 @@
+{
+  "plan_schema_version": 1,
+  "kind": "organize",
+  "policy": {
+    "for": "organize",
+    "layout": "yyyy/yyyy-mm",
+    "unknown_date_dir": "unknown-date",
+    "date_source_order": [
+      "exif",
+      "mtime",
+      "archive_date"
+    ],
+    "conflict_rule": "suffix_ordinal"
+  },
+  "roots": [
+    {
+      "root_id": 0,
+      "role": "source",
+      "path_display": "/plans/src/photos",
+      "path_raw": "2f706c616e732f7372632f70686f746f73",
+      "source": {
+        "label": "photos",
+        "index_uuid": "70f0f36db2a664a9c05d15bc9285c9cf",
+        "index_schema_version": 3,
+        "content_mode": "full",
+        "hash_algo": "blake3",
+        "phash_algo": "sage-dct-v1",
+        "files_indexed": 5,
+        "source_type": "dir",
+        "fingerprint": {
+          "kind": "none",
+          "reason": "directory_source_v1"
+        }
+      }
+    },
+    {
+      "root_id": 1,
+      "role": "destination",
+      "path_display": "/plans/dest",
+      "path_raw": "2f706c616e732f64657374",
+      "source": null
+    }
+  ],
+  "actions": [
+    {
+      "action_id": "e77beae7786f58ab694a21de2586447b",
+      "ordinal": 0,
+      "op": {
+        "action": "mkdir",
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "32303139"
+          ],
+          "display": "2019"
+        }
+      }
+    },
+    {
+      "action_id": "90318034354411ba8095453837344b46",
+      "ordinal": 1,
+      "op": {
+        "action": "mkdir",
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "32303139",
+            "323031392d3034"
+          ],
+          "display": "2019/2019-04"
+        }
+      }
+    },
+    {
+      "action_id": "c458fe2d8616eaf5d7278b28128ff097",
+      "ordinal": 2,
+      "op": {
+        "action": "mkdir",
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "756e6b6e6f776e2d64617465"
+          ],
+          "display": "unknown-date"
+        }
+      }
+    },
+    {
+      "action_id": "bc791151c0e29a818fb79593cf27ee34",
+      "ordinal": 3,
+      "op": {
+        "action": "move",
+        "source": {
+          "root_id": 0,
+          "file_id": 11,
+          "parts_raw": [
+            "61",
+            "494d475f303034322e6a7067"
+          ],
+          "display": "a/IMG_0042.jpg",
+          "content_hash": "b3:01bd30fcc68f26ca79e8f9dabcf75a0dc5f91c389bd30d9d8428bd4186ca6073",
+          "size": 184320,
+          "mtime_unix": 1554120000
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "32303139",
+            "323031392d3034",
+            "494d475f303034322e6a7067"
+          ],
+          "display": "2019/2019-04/IMG_0042.jpg"
+        },
+        "conflict": {
+          "rule": "suffix_ordinal",
+          "ordinal": 0,
+          "competing_with": [
+            {
+              "root_id": 0,
+              "file_id": 11
+            },
+            {
+              "root_id": 0,
+              "file_id": 12
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action_id": "c2fc416ab5ab33155bce24d75cb983e1",
+      "ordinal": 4,
+      "op": {
+        "action": "move",
+        "source": {
+          "root_id": 0,
+          "file_id": 12,
+          "parts_raw": [
+            "62",
+            "494d475f303034322e6a7067"
+          ],
+          "display": "b/IMG_0042.jpg",
+          "content_hash": "b3:205a19babc8eaa7a04e9a9d5dc20d2e6f950970854812e4a703aa85dc8641995",
+          "size": 184321,
+          "mtime_unix": 1554130000
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "32303139",
+            "323031392d3034",
+            "494d475f303034322d312e6a7067"
+          ],
+          "display": "2019/2019-04/IMG_0042-1.jpg"
+        },
+        "conflict": {
+          "rule": "suffix_ordinal",
+          "ordinal": 1,
+          "competing_with": [
+            {
+              "root_id": 0,
+              "file_id": 11
+            },
+            {
+              "root_id": 0,
+              "file_id": 12
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action_id": "c8fd26e0d4c71210ecad50c30e3d7008",
+      "ordinal": 5,
+      "op": {
+        "action": "move",
+        "source": {
+          "root_id": 0,
+          "file_id": 14,
+          "parts_raw": [
+            "6578706f727473",
+            "6e6f74652e747874"
+          ],
+          "display": "exports/note.txt",
+          "content_hash": "b3:371bd81463a76d2f6844504db25925db1b4acce3b471d8dc220536d4ca7e9a73",
+          "size": 2048,
+          "mtime_unix": null
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "756e6b6e6f776e2d64617465",
+            "6e6f74652e747874"
+          ],
+          "display": "unknown-date/note.txt"
+        },
+        "conflict": {
+          "rule": "none"
+        }
+      }
+    },
+    {
+      "action_id": "69e816da7c7949b3807938cd01ebde82",
+      "ordinal": 6,
+      "op": {
+        "action": "move",
+        "source": {
+          "root_id": 0,
+          "file_id": 13,
+          "parts_raw": [
+            "7363616e73",
+            "7363616e2e74696666"
+          ],
+          "display": "scans/scan.tiff",
+          "content_hash": "b3:94df36e58b2e54a96643074caef26cee6f841eabef4fe363551c31876ae14840",
+          "size": 40960,
+          "mtime_unix": null
+        },
+        "dest": {
+          "root_id": 1,
+          "parts_raw": [
+            "756e6b6e6f776e2d64617465",
+            "7363616e2e74696666"
+          ],
+          "display": "unknown-date/scan.tiff"
+        },
+        "conflict": {
+          "rule": "none"
+        }
+      }
+    }
+  ],
+  "groups": [],
+  "excluded": [
+    {
+      "root_id": 0,
+      "file_id": 15,
+      "parts_raw": [
+        "6c696e6b73",
+        "6c61746573742e6a7067"
+      ],
+      "display": "links/latest.jpg",
+      "content_hash": null,
+      "size": 12,
+      "mtime_unix": 1554140000,
+      "reason": "symlink"
+    }
+  ],
+  "summary": {
+    "actions_total": 7,
+    "actions_by_op": [
+      {
+        "op": "mkdir",
+        "count": 3
+      },
+      {
+        "op": "move",
+        "count": 4
+      }
+    ],
+    "bytes_affected": 411649,
+    "groups_total": 0,
+    "excluded_total": 1,
+    "excluded_bytes": 12,
+    "roots_written": [
+      1
+    ]
+  }
+}
