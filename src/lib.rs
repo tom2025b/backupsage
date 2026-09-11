@@ -3,9 +3,9 @@
 //! Split into a library so the pipeline is testable; `main.rs` only parses
 //! arguments and renders output.
 
-pub mod cli;
 #[cfg(target_os = "linux")]
 pub mod borg;
+pub mod cli;
 pub mod dedup;
 pub mod exif_date;
 pub mod format;
