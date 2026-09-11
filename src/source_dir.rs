@@ -21,6 +21,18 @@ pub(crate) fn index_dir(
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
 ) -> Result<IndexSummary> {
+    index_dir_after_count(dir, explicit_db, opts, || Ok(()))
+}
+
+fn index_dir_after_count<F>(
+    dir: &Path,
+    explicit_db: Option<&Path>,
+    opts: &IndexOptions,
+    after_count: F,
+) -> Result<IndexSummary>
+where
+    F: FnOnce() -> Result<()>,
+{
     let (paths, conn) = create_db_with_fallback(dir, explicit_db, "dir", opts)?;
     let db_path = paths.final_path.clone();
     // Names to skip during the walk: the final output and the staged
@@ -45,14 +57,11 @@ pub(crate) fn index_dir(
     println!("Index   : {}", db_path.display());
     println!();
 
-    // Cheap metadata-only pre-count so the bar has a total.
-    let total = WalkDir::new(dir)
-        .follow_links(false)
-        .min_depth(1)
-        .into_iter()
-        .flatten()
-        .filter(|e| !e.file_type().is_dir())
-        .count() as u64;
+    // Cheap metadata-only pre-count so the bar has a total.  This is a
+    // safety walk too: errors and nested Borg candidates abort instead of
+    // being flattened away, before any content file is opened.
+    let total = count_entries(dir)?;
+    after_count()?;
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::with_template(
@@ -71,24 +80,18 @@ pub(crate) fn index_dir(
     let mut run = IndexRun::new(&conn, opts, &mut summary)?;
     let mut entry_no = 0u64;
 
-    for walk_entry in WalkDir::new(dir)
+    let mut walker = WalkDir::new(dir)
         .follow_links(false)
         .min_depth(1)
         .sort_by_file_name()
-    {
-        let walk_entry = match walk_entry {
-            Ok(e) => e,
-            Err(e) => {
-                pb.suspend(|| {
-                    eprintln!(
-                        "{}",
-                        crate::textsafe::sanitize(&format!("warning: cannot walk: {e}"))
-                    )
-                });
-                continue;
-            }
-        };
+        .into_iter();
+    while let Some(walk_entry) = walker.next() {
+        let walk_entry = walk_entry.context("cannot walk directory source")?;
         if walk_entry.file_type().is_dir() {
+            if let Err(e) = crate::borg_guard::reject_borg_directory(walk_entry.path()) {
+                walker.skip_current_dir();
+                return Err(e);
+            }
             continue;
         }
         let abs = walk_entry.path();
@@ -245,6 +248,26 @@ pub(crate) fn index_dir(
     Ok(summary)
 }
 
+fn count_entries(dir: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    let mut walker = WalkDir::new(dir)
+        .follow_links(false)
+        .min_depth(1)
+        .into_iter();
+    while let Some(entry) = walker.next() {
+        let entry = entry.context("cannot pre-count directory source")?;
+        if entry.file_type().is_dir() {
+            if let Err(e) = crate::borg_guard::reject_borg_directory(entry.path()) {
+                walker.skip_current_dir();
+                return Err(e);
+            }
+        } else {
+            total += 1;
+        }
+    }
+    Ok(total)
+}
+
 #[cfg(unix)]
 fn unix_mode(md: &std::fs::Metadata) -> u32 {
     use std::os::unix::fs::PermissionsExt;
@@ -254,4 +277,57 @@ fn unix_mode(md: &std::fs::Metadata) -> u32 {
 #[cfg(not(unix))]
 fn unix_mode(_md: &std::fs::Metadata) -> u32 {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn add_candidate(path: &Path) {
+        std::fs::create_dir_all(path.join("data/0")).unwrap();
+        std::fs::write(path.join("data/0/0"), b"segment sentinel").unwrap();
+        std::fs::write(
+            path.join("config"),
+            b"[repository]\nversion = 1\nid = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn pre_count_refuses_nested_repository_instead_of_flattening_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        std::fs::create_dir_all(source.join("ordinary")).unwrap();
+        std::fs::write(source.join("ordinary/file.txt"), b"ordinary").unwrap();
+        add_candidate(&source.join("nested"));
+
+        let error = format!("{:#}", count_entries(&source).unwrap_err());
+        assert!(error.contains("Borg repository candidate"), "{error}");
+    }
+
+    #[test]
+    fn sorted_walk_rechecks_directory_that_changes_after_pre_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let nested = source.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(source.join("ordinary.txt"), b"ordinary").unwrap();
+
+        let result = index_dir_after_count(&source, None, &IndexOptions::default(), || {
+            add_candidate(&nested);
+            Ok(())
+        });
+
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("Borg repository candidate"), "{error}");
+        assert!(!temp.path().join("source.db").exists());
+        let names: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|name| !name.contains(".tmp.")),
+            "{names:?}"
+        );
+    }
 }

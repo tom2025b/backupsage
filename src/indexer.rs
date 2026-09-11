@@ -143,6 +143,7 @@ pub fn run_index(
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
 ) -> Result<IndexSummary> {
+    crate::borg_guard::reject_borg_source(source)?;
     if source.is_dir() {
         crate::source_dir::index_dir(source, explicit_db, opts)
     } else {

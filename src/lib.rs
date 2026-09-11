@@ -5,6 +5,7 @@
 
 #[cfg(target_os = "linux")]
 pub mod borg;
+mod borg_guard;
 pub mod cli;
 pub mod dedup;
 pub mod exif_date;
