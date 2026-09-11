@@ -21,13 +21,20 @@ jobs:
       - name: Install Borg 1.4.4
         # #82's runtime boundary refuses anything but the exact validated
         # capability profile (see src/borg/runtime.rs), pinned to 1.4.4 --
-        # so CI needs that exact version at /usr/bin/borg, not "whatever
-        # apt's ubuntu-latest happens to carry today".
+        # so CI needs that exact version at /usr/bin/borg. Building from
+        # source via pip needs libxxhash-dev/liblz4-dev/libzstd-dev/
+        # libssl-dev present; apt's own package is simpler when it carries
+        # the exact version, so try that first and fail loudly rather than
+        # silently accepting a different version if it doesn't.
         run: |
-          pip install --user 'borgbackup==1.4.4'
-          borg_bin="$(python3 -m site --user-base)/bin/borg"
-          sudo ln -sf "$borg_bin" /usr/bin/borg
-          borg --version
+          sudo apt-get update
+          sudo apt-get install -y borgbackup
+          got="$(borg --version)"
+          if [ "$got" != "borg 1.4.4" ]; then
+            echo "::error::apt installed '$got', not 'borg 1.4.4' -- pin a source build instead"
+            exit 1
+          fi
+          command -v borg
       - name: Build
         run: cargo build --locked
       - name: Test
