@@ -7,6 +7,7 @@
 pub mod borg;
 mod borg_guard;
 pub mod dedup;
+pub mod diff;
 pub mod exif_date;
 pub mod format;
 pub mod indexer;
