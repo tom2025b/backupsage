@@ -2,6 +2,7 @@
 //!
 //! The test-only mock exercises API/error/process plumbing on writable storage;
 //! it is never evidence of filesystem immutability (ADR 0008).
+mod btrfs_uapi;
 mod capability;
 mod environment;
 mod operation;
@@ -42,5 +43,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[cfg(test)]
+mod privileged_tests;
 #[cfg(test)]
 mod tests;
