@@ -5,6 +5,7 @@
 mod btrfs_uapi;
 mod capability;
 mod environment;
+mod landlock;
 mod operation;
 mod process;
 mod runtime;

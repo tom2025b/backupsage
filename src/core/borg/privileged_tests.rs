@@ -103,6 +103,140 @@ fn local_snapshot_is_not_received() {
     );
 }
 
+/// Outcome of a real write attempt made inside a forked child.
+#[derive(Debug, PartialEq, Eq)]
+enum WriteAttempt {
+    Succeeded,
+    Denied,
+    OtherFailure(i32),
+}
+
+/// Fork, optionally enforce a Landlock ruleset, then genuinely attempt to
+/// create a file. Runs in a child because `landlock_restrict_self` is
+/// irreversible and inherited — enforcing it in the test process itself would
+/// silently poison every later test in the same binary.
+///
+/// Everything that allocates (the CString) happens before the fork; the child
+/// touches only raw libc calls and `_exit`, matching `process.rs`'s standing
+/// invariant.
+fn write_attempt(
+    target: &std::path::Path,
+    ruleset: Option<&super::landlock::Ruleset>,
+) -> WriteAttempt {
+    let c_target = std::ffi::CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
+    let ruleset_fd = ruleset.map(|r| r.as_raw_fd());
+
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork failed");
+    if pid == 0 {
+        unsafe {
+            if let Some(fd) = ruleset_fd {
+                if super::landlock::restrict_self(fd).is_err() {
+                    libc::_exit(90);
+                }
+            }
+            let fd = libc::open(c_target.as_ptr(), libc::O_CREAT | libc::O_WRONLY, 0o600);
+            if fd >= 0 {
+                libc::_exit(0);
+            }
+            let err = *libc::__errno_location();
+            libc::_exit(if err == libc::EACCES || err == libc::EPERM {
+                1
+            } else {
+                50 + (err % 40)
+            });
+        }
+    }
+    let mut status = 0;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    let code = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else {
+        -1
+    };
+    match code {
+        0 => WriteAttempt::Succeeded,
+        1 => WriteAttempt::Denied,
+        other => WriteAttempt::OtherFailure(other),
+    }
+}
+
+/// Two-way proof for the Landlock layer, deliberately on a WRITABLE ext4
+/// directory rather than the Btrfs read-only snapshot. ADR 0008 requires
+/// exactly this isolation: "use a service-writable clone/unrelated tree so
+/// Btrfs RO does not mask it." If this ran against the RO snapshot, Btrfs
+/// alone would deny the write and the test would pass while proving nothing
+/// whatsoever about Landlock.
+///
+/// The positive control is the load-bearing half: it proves the write path
+/// genuinely works when unconfined, so the denial in the confined case is
+/// attributable to Landlock and not to a broken fixture, a bad path, or a
+/// permissions accident.
+#[test]
+#[ignore = "requires Landlock ABI 3+; run only in the privileged fixture VM"]
+fn landlock_denies_writes_it_handles_and_the_control_proves_it() {
+    use super::landlock::{Rule, Ruleset, READ_ONLY_DIR};
+
+    let abi = super::landlock::abi_version().expect("Landlock must be available in the fixture");
+    assert!(
+        abi >= super::landlock::REQUIRED_ABI,
+        "ADR 0008 sets ABI 3 as the floor (TRUNCATE mediation); fixture reports {abi}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let unconfined_target = dir.path().join("control-write");
+    let confined_target = dir.path().join("confined-write");
+
+    // Positive control, unconfined: the write must genuinely succeed.
+    assert_eq!(
+        write_attempt(&unconfined_target, None),
+        WriteAttempt::Succeeded,
+        "control write failed while UNCONFINED — the fixture itself is broken, so a \
+         denial in the confined case below would prove nothing about Landlock"
+    );
+
+    // Same directory, same operation, now under a read-only Landlock rule.
+    let ruleset = Ruleset::build(&[Rule {
+        path: dir.path().to_path_buf(),
+        access: READ_ONLY_DIR,
+    }])
+    .expect("ruleset construction must succeed on a supported kernel");
+
+    assert_eq!(
+        write_attempt(&confined_target, Some(&ruleset)),
+        WriteAttempt::Denied,
+        "Landlock granted only READ_ONLY_DIR yet the write succeeded — either a MAKE_REG \
+         right leaked into the allow rule or it is missing from HANDLED_ACCESS_FS, in \
+         which case Landlock permits it by default"
+    );
+}
+
+/// Landlock must not deny what the policy legitimately grants. A ruleset that
+/// denies everything would pass the test above while making Borg unable to
+/// write its own private state, which ADR 0008 explicitly requires to remain
+/// writable. This is the overbroad-rule inversion.
+#[test]
+#[ignore = "requires Landlock ABI 3+; run only in the privileged fixture VM"]
+fn landlock_still_permits_the_private_state_hierarchy() {
+    use super::landlock::{Rule, Ruleset, PRIVATE_STATE_DIR};
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("state-write");
+
+    let ruleset = Ruleset::build(&[Rule {
+        path: dir.path().to_path_buf(),
+        access: PRIVATE_STATE_DIR,
+    }])
+    .expect("ruleset construction must succeed on a supported kernel");
+
+    assert_eq!(
+        write_attempt(&target, Some(&ruleset)),
+        WriteAttempt::Succeeded,
+        "the private-state hierarchy must stay writable under Landlock; Borg's \
+         base/cache/security state genuinely needs create and write rights"
+    );
+}
+
 /// Refusal case: an ordinary ext4/non-Btrfs directory must be rejected with
 /// `NotBtrfs`, never silently treated as unsupported-but-maybe-OK.
 #[test]
