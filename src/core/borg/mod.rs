@@ -9,6 +9,7 @@ mod landlock;
 mod operation;
 mod process;
 mod runtime;
+mod seccomp;
 mod state;
 
 pub use capability::{UnsupportedBackend, ValidationBackend, VerifiedImmutableSnapshot};

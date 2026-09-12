@@ -137,6 +137,28 @@ pub enum BtrfsQueryError {
     IoctlFailed,
 }
 
+/// `BTRFS_FIRST_FREE_OBJECTID` (btrfs_tree.h) — the inode number reserved for
+/// a Btrfs subvolume's own root directory, in every subvolume. Found missing
+/// by cross-host review: `BTRFS_IOC_GET_SUBVOL_INFO` returns the CONTAINING
+/// subvolume's identity for any inode inside it, so calling it on an
+/// ordinary subdirectory of the snapshot silently returns the snapshot's own
+/// provenance. ADR 0008 requires "the descriptor must name the subvolume
+/// root, not a descendant" — this constant is the actual check for that,
+/// which nothing in this module performed until now.
+pub const BTRFS_FIRST_FREE_OBJECTID: u64 = 256;
+
+/// Whether the open FD names a subvolume root rather than some descendant
+/// path inside it. Must be checked ALONGSIDE `query_subvolume_facts`, not
+/// instead of it — a descendant's `st_ino` differs from the root's, but its
+/// `BTRFS_IOC_GET_SUBVOL_INFO` result is indistinguishable from the root's.
+pub fn is_subvolume_root(fd: RawFd) -> Result<bool, BtrfsQueryError> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 {
+        return Err(BtrfsQueryError::IoctlFailed);
+    }
+    Ok(st.st_ino == BTRFS_FIRST_FREE_OBJECTID)
+}
+
 /// Query both ioctls on the given FD and return the identity facts, or a
 /// reason the FD is not a queryable Btrfs subvolume root. Takes a raw FD
 /// deliberately — callers own the FD's lifetime; this never closes it.

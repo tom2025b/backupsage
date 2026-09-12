@@ -15,7 +15,7 @@
 //! Set BACKUPSAGE_BTRFS_FIXTURE to the path of a real received Btrfs
 //! subvolume before running. Never point this at a production repository or
 //! `/mnt/borgnvme` — see ADR 0008's acceptance-fixture requirements.
-use super::btrfs_uapi::{query_subvolume_facts, BtrfsQueryError};
+use super::btrfs_uapi::{is_subvolume_root, query_subvolume_facts, BtrfsQueryError};
 use std::os::fd::AsRawFd;
 
 fn fixture_path() -> std::path::PathBuf {
@@ -69,6 +69,118 @@ fn received_snapshot_has_nonzero_provenance() {
     eprintln!(
         "generation={} ctransid={} otransid={} stransid={} rtransid={}",
         facts.generation, facts.ctransid, facts.otransid, facts.stransid, facts.rtransid
+    );
+
+    assert!(
+        is_subvolume_root(dir.as_raw_fd()).expect("fstat must succeed on an open FD"),
+        "the fixture path itself must be a subvolume root for this test to mean anything"
+    );
+
+    // Turn the "cross-checked byte-for-byte against btrfs subvolume show"
+    // claim into a real, automated assertion instead of a one-time manual
+    // eyeball comparison — a review correctly called the earlier version an
+    // overclaim, since nothing in the test suite actually re-derived these
+    // values independently. This shells out to btrfs-progs itself, which is
+    // a genuinely independent implementation reading the same on-disk
+    // structures, not a second call into this module's own ioctl code.
+    let show = std::process::Command::new("btrfs")
+        .args(["subvolume", "show", path.to_str().unwrap()])
+        .output()
+        .expect("btrfs subvolume show must run");
+    assert!(
+        show.status.success(),
+        "btrfs subvolume show failed: {show:?}"
+    );
+    let show_text = String::from_utf8_lossy(&show.stdout);
+
+    let field = |label: &str| -> String {
+        show_text
+            .lines()
+            .find(|l| l.trim_start().starts_with(label))
+            .unwrap_or_else(|| panic!("btrfs subvolume show output missing '{label}': {show_text}"))
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .to_string()
+    };
+    let parse_uuid = |s: &str| -> [u8; 16] {
+        let hex: String = s.chars().filter(|c| *c != '-').collect();
+        let mut out = [0u8; 16];
+        for i in 0..16 {
+            out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        out
+    };
+
+    assert_eq!(
+        facts.subvol_uuid,
+        parse_uuid(&field("UUID:")),
+        "ioctl-derived subvol_uuid must match btrfs-progs' own independent read"
+    );
+    assert_eq!(
+        facts.received_uuid,
+        parse_uuid(&field("Received UUID:")),
+        "ioctl-derived received_uuid must match btrfs-progs' own independent read"
+    );
+    assert_eq!(
+        facts.generation,
+        field("Generation:").parse::<u64>().unwrap(),
+        "ioctl-derived generation must match btrfs-progs' own independent read"
+    );
+    assert_eq!(
+        facts.rtransid,
+        field("Receive transid:").parse::<u64>().unwrap(),
+        "ioctl-derived rtransid must match btrfs-progs' own independent read"
+    );
+    assert_eq!(
+        facts.stransid,
+        field("Send transid:").parse::<u64>().unwrap(),
+        "ioctl-derived stransid must match btrfs-progs' own independent read"
+    );
+    assert_eq!(
+        show_text
+            .lines()
+            .any(|l| l.contains("Flags:") && l.contains("readonly")),
+        facts.readonly,
+        "ioctl-derived readonly flag must match btrfs-progs' own independent read"
+    );
+}
+
+/// Inverted case for the subvolume-root identity check: an ordinary
+/// subdirectory INSIDE the received snapshot must be refused as a root, even
+/// though `BTRFS_IOC_GET_SUBVOL_INFO` on that same directory would return the
+/// enclosing subvolume's identity unchanged — that ioctl answers "which
+/// subvolume contains this inode", not "is this inode the subvolume root".
+/// A caller that skipped the inode check would accept a descendant path with
+/// full-looking provenance.
+#[test]
+#[ignore = "requires a real Btrfs received subvolume fixture; see file docs"]
+fn descendant_directory_is_not_a_subvolume_root() {
+    let path = fixture_path();
+    let descendant = path.join("data");
+    let dir = std::fs::File::open(&descendant)
+        .unwrap_or_else(|e| panic!("fixture must contain a data/ subdirectory: {e}"));
+
+    // The descendant's ioctl-reported identity is indistinguishable from the
+    // root's — that is precisely the trap this test exists to name.
+    let root_facts = query_subvolume_facts(
+        std::fs::File::open(&path)
+            .expect("fixture path must be openable")
+            .as_raw_fd(),
+    )
+    .expect("fixture path must be a real Btrfs subvolume");
+    let descendant_facts =
+        query_subvolume_facts(dir.as_raw_fd()).expect("descendant must still answer the ioctl");
+    assert_eq!(
+        root_facts, descendant_facts,
+        "test assumption broken: the ioctl was expected to return identical \
+         identity for root and descendant"
+    );
+
+    assert!(
+        !is_subvolume_root(dir.as_raw_fd()).expect("fstat must succeed on an open FD"),
+        "a descendant directory must NOT pass the subvolume-root check, even \
+         though its Btrfs identity ioctl looks identical to the root's"
     );
 }
 
@@ -147,8 +259,24 @@ fn write_attempt(
             });
         }
     }
+    // A found gap: waitpid's return was previously ignored, so an EINTR
+    // (returns -1, leaves `status` at its initial 0) would read as
+    // WIFEXITED(0) == true, WEXITSTATUS(0) == 0 == Succeeded — the safe
+    // direction for the denial test, but silent false evidence for the
+    // permits-writes test, which would then assert success without the
+    // child having run at all. Retry until a real status is collected.
     let mut status = 0;
-    unsafe { libc::waitpid(pid, &mut status, 0) };
+    loop {
+        let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if rc == pid {
+            break;
+        }
+        assert_eq!(
+            unsafe { *libc::__errno_location() },
+            libc::EINTR,
+            "waitpid failed for a reason other than EINTR"
+        );
+    }
     let code = if libc::WIFEXITED(status) {
         libc::WEXITSTATUS(status)
     } else {

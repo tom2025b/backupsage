@@ -37,6 +37,12 @@ pub const LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
 pub const LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
 pub const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
 pub const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+/// Available since ABI 5 (linux/landlock.h: "available since the fifth
+/// version of the Landlock ABI"). Absent from the original 15-bit mask this
+/// module shipped with — found by a review run on a different, newer host
+/// (ABI 8) than this module's own fixture VM (ABI 4), which structurally
+/// could not have revealed the gap: the bit does not exist at ABI 4.
+pub const LANDLOCK_ACCESS_FS_IOCTL_DEV: u64 = 1 << 15;
 
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
 
@@ -48,13 +54,18 @@ const SYS_LANDLOCK_RESTRICT_SELF: libc::c_long = 446;
 /// truncation." TRUNCATE (bit 14) arrived in ABI 3.
 pub const REQUIRED_ABI: i32 = 3;
 
-/// Every filesystem right this ruleset takes responsibility for denying.
-/// Landlock is deny-by-default only for rights named here — anything omitted
-/// from `handled_access_fs` is silently ALLOWED, which is why this list is
-/// exhaustive rather than "the ones we care about". ADR 0008 enumerates
-/// EXECUTE, READ_FILE, READ_DIR, WRITE_FILE, TRUNCATE, REMOVE_FILE,
-/// REMOVE_DIR, REFER "and every MAKE_* right".
-pub const HANDLED_ACCESS_FS: u64 = LANDLOCK_ACCESS_FS_EXECUTE
+/// The 15 rights that exist as of ABI 3 (this module's floor). Landlock is
+/// deny-by-default only for rights named in `handled_access_fs` — anything
+/// omitted is silently ALLOWED. ADR 0008 enumerates exactly these: EXECUTE,
+/// READ_FILE, READ_DIR, WRITE_FILE, TRUNCATE, REMOVE_FILE, REMOVE_DIR, REFER
+/// "and every MAKE_* right".
+///
+/// This is the FLOOR, not the whole mask — see `handled_access_fs_for_abi`.
+/// A fixed constant here was the bug: IOCTL_DEV (ABI 5) is a filesystem right
+/// too, and a ruleset that never adds it to `handled_access_fs` allows every
+/// device ioctl on any path the child can open, on every kernel newer than
+/// ABI 4, silently.
+const HANDLED_ACCESS_FS_ABI3: u64 = LANDLOCK_ACCESS_FS_EXECUTE
     | LANDLOCK_ACCESS_FS_WRITE_FILE
     | LANDLOCK_ACCESS_FS_READ_FILE
     | LANDLOCK_ACCESS_FS_READ_DIR
@@ -69,6 +80,37 @@ pub const HANDLED_ACCESS_FS: u64 = LANDLOCK_ACCESS_FS_EXECUTE
     | LANDLOCK_ACCESS_FS_MAKE_SYM
     | LANDLOCK_ACCESS_FS_REFER
     | LANDLOCK_ACCESS_FS_TRUNCATE;
+
+/// Every filesystem right this module has actually reviewed against
+/// linux/landlock.h, as of ABI 6 (the highest ABI that added a new
+/// filesystem-relevant right at time of writing — ABI 7 and 8 add no new
+/// `LANDLOCK_ACCESS_FS_*` bit per the same header). `Ruleset::build` ANDs
+/// this down to what the running kernel's ABI actually supports, so an
+/// older kernel gets exactly the ABI-3 floor and a newer one gets every
+/// right this module knows to name — never a fixed guess that silently
+/// stops matching reality as the kernel moves forward.
+///
+/// `LANDLOCK_SCOPE_*` (ABI 6: abstract UNIX sockets, signals) is a
+/// deliberate, disclosed gap, not an oversight: it lives in a separate
+/// `scoped` field requiring the larger ABI-6 `landlock_ruleset_attr`
+/// layout, and ADR 0008 assigns FD-receipt denial (`recvmsg`, `pidfd_getfd`)
+/// to the seccomp layer instead. Wiring `scoped` properly is real remaining
+/// work, not silently covered by this constant.
+const HANDLED_ACCESS_FS_REVIEWED: u64 = HANDLED_ACCESS_FS_ABI3 | LANDLOCK_ACCESS_FS_IOCTL_DEV;
+
+/// The `handled_access_fs` bitmask to actually request, for a kernel that
+/// reported the given ABI version via `abi_version()`. Never returns a right
+/// the kernel doesn't support — Landlock refuses `create_ruleset` outright if
+/// `handled_access_fs` names an unsupported bit, so building the mask
+/// unconditionally at the newest reviewed level would break on an older
+/// kernel instead of degrading to its floor.
+pub fn handled_access_fs_for_abi(abi: i32) -> u64 {
+    if abi >= 5 {
+        HANDLED_ACCESS_FS_REVIEWED
+    } else {
+        HANDLED_ACCESS_FS_ABI3
+    }
+}
 
 /// Read-only access to a directory hierarchy: the repository pin, the Borg /
 /// runtime trees (which additionally need EXECUTE), keys and credentials.
@@ -162,7 +204,7 @@ impl Ruleset {
         }
 
         let attr = landlock_ruleset_attr {
-            handled_access_fs: HANDLED_ACCESS_FS,
+            handled_access_fs: handled_access_fs_for_abi(abi),
             handled_access_net: 0,
         };
         let rc = unsafe {
@@ -241,4 +283,70 @@ pub unsafe fn restrict_self(ruleset_fd: RawFd) -> Result<(), LandlockError> {
         return Err(LandlockError::RestrictFailed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact regression a cross-host review caught: a fixed 15-bit
+    /// (ABI-3) mask silently omits IOCTL_DEV on any kernel that actually
+    /// supports it. This runs in ordinary CI — no privilege, no real
+    /// Landlock syscall — because it tests the pure ABI-to-mask function,
+    /// not enforcement.
+    #[test]
+    fn ioctl_dev_is_handled_from_abi_5_onward() {
+        for abi in 5..=10 {
+            assert_ne!(
+                handled_access_fs_for_abi(abi) & LANDLOCK_ACCESS_FS_IOCTL_DEV,
+                0,
+                "ABI {abi} supports IOCTL_DEV; the mask must handle it or \
+                 device ioctls are silently allowed"
+            );
+        }
+    }
+
+    /// The inverse: never request a bit the running kernel doesn't support.
+    /// Landlock refuses create_ruleset outright if handled_access_fs names
+    /// an unsupported right — requesting IOCTL_DEV on ABI 3/4 would not
+    /// under-protect, it would make the entire ruleset fail to construct.
+    #[test]
+    fn ioctl_dev_is_not_requested_below_abi_5() {
+        for abi in 3..5 {
+            assert_eq!(
+                handled_access_fs_for_abi(abi) & LANDLOCK_ACCESS_FS_IOCTL_DEV,
+                0,
+                "ABI {abi} predates IOCTL_DEV; requesting it would make \
+                 create_ruleset fail on a real kernel at that ABI"
+            );
+        }
+    }
+
+    /// The ABI-3 floor itself must never regress silently. Every right ADR
+    /// 0008 names must survive whatever this function does at any ABI.
+    #[test]
+    fn every_adr_0008_right_is_handled_at_every_supported_abi() {
+        let required = LANDLOCK_ACCESS_FS_EXECUTE
+            | LANDLOCK_ACCESS_FS_WRITE_FILE
+            | LANDLOCK_ACCESS_FS_READ_FILE
+            | LANDLOCK_ACCESS_FS_READ_DIR
+            | LANDLOCK_ACCESS_FS_TRUNCATE
+            | LANDLOCK_ACCESS_FS_REMOVE_FILE
+            | LANDLOCK_ACCESS_FS_REMOVE_DIR
+            | LANDLOCK_ACCESS_FS_REFER
+            | LANDLOCK_ACCESS_FS_MAKE_CHAR
+            | LANDLOCK_ACCESS_FS_MAKE_DIR
+            | LANDLOCK_ACCESS_FS_MAKE_REG
+            | LANDLOCK_ACCESS_FS_MAKE_SOCK
+            | LANDLOCK_ACCESS_FS_MAKE_FIFO
+            | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+            | LANDLOCK_ACCESS_FS_MAKE_SYM;
+        for abi in 3..=10 {
+            assert_eq!(
+                handled_access_fs_for_abi(abi) & required,
+                required,
+                "ABI {abi} must still handle every ADR 0008 right"
+            );
+        }
+    }
 }
