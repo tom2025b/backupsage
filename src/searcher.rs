@@ -310,6 +310,20 @@ pub fn search_all(
 ///   3. `./backupsage.db` (v0.1's fallback name)
 ///   4. any BackupSage database in the current directory, with a hint
 pub fn discover_db_path(explicit: Option<&Path>, archive: Option<&Path>) -> Result<PathBuf> {
+    discover_db_path_with_control(
+        explicit,
+        archive,
+        &crate::progress::OperationControl::default(),
+    )
+}
+
+/// Discover an index with frontend-owned hints and cooperative cancellation.
+pub fn discover_db_path_with_control(
+    explicit: Option<&Path>,
+    archive: Option<&Path>,
+    control: &crate::progress::OperationControl<'_>,
+) -> Result<PathBuf> {
+    control.check_cancelled()?;
     if let Some(p) = explicit {
         return Ok(p.to_path_buf());
     }
@@ -343,14 +357,12 @@ pub fn discover_db_path(explicit: Option<&Path>, archive: Option<&Path>) -> Resu
             .collect();
         candidates.sort();
         for p in candidates {
+            control.check_cancelled()?;
             let ok = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map(|c| is_backupsage_db(&c))
                 .unwrap_or(false);
             if ok {
-                eprintln!(
-                    "hint: using index '{}' — pass --index to be explicit",
-                    crate::textsafe::sanitize(&p.display().to_string())
-                );
+                control.emit(crate::progress::ProgressEvent::IndexDiscovered { path: &p });
                 return Ok(p);
             }
         }
