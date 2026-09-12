@@ -18,14 +18,14 @@ mod sealed {
 /// as the trusted locator/provenance registries; source alone is not sufficient.
 ///
 /// ```compile_fail
-/// use backupsage::borg::{ValidationBackend, VerifiedImmutableSnapshot, Result};
+/// use backupsage_core::borg::{ValidationBackend, VerifiedImmutableSnapshot, Result};
 /// struct UncheckedBackend;
 /// impl ValidationBackend for UncheckedBackend {
 ///     fn validate(&self, _: &std::path::Path) -> Result<VerifiedImmutableSnapshot> { unimplemented!() }
 /// }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::MockBackend; // absent from every production build
+/// use backupsage_core::borg::MockBackend; // absent from every production build
 /// ```
 pub trait ValidationBackend: sealed::Sealed {
     fn validate(&self, source: &Path) -> Result<VerifiedImmutableSnapshot>;
@@ -44,19 +44,19 @@ impl ValidationBackend for UnsupportedBackend {
 /// There is no enabled production success path yet.
 ///
 /// ```compile_fail
-/// use backupsage::borg::VerifiedImmutableSnapshot;
+/// use backupsage_core::borg::VerifiedImmutableSnapshot;
 /// let _ = VerifiedImmutableSnapshot::new("/tmp/repo");
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::VerifiedImmutableSnapshot;
+/// use backupsage_core::borg::VerifiedImmutableSnapshot;
 /// let _: VerifiedImmutableSnapshot = std::path::PathBuf::from("/tmp/repo").into();
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::VerifiedImmutableSnapshot;
+/// use backupsage_core::borg::VerifiedImmutableSnapshot;
 /// let _: VerifiedImmutableSnapshot = "/tmp/repo".into();
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::VerifiedImmutableSnapshot;
+/// use backupsage_core::borg::VerifiedImmutableSnapshot;
 /// let _ = VerifiedImmutableSnapshot { pin: std::fs::File::open("/").unwrap() };
 /// ```
 pub struct VerifiedImmutableSnapshot {

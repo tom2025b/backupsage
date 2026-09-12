@@ -1,0 +1,12 @@
+[package]
+name = "backupsage-web"
+version = "1.0.2"
+edition = "2021"
+description = "Reserved web frontend for BackupSage"
+license = "MIT"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+backupsage-core = { path = "../core" }

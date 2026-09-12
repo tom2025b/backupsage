@@ -2399,7 +2399,7 @@ mod contract {
     }
 
     fn fixture_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plan")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/plan")
     }
 
     fn fixture_path(name: &str) -> PathBuf {
@@ -2490,7 +2490,7 @@ mod contract {
 
     fn schema() -> serde_json::Value {
         let bytes = std::fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/schema/plan-v1.schema.json"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/schema/plan-v1.schema.json"),
         )
         .expect("schema file exists");
         serde_json::from_slice(&bytes).expect("schema is valid JSON")
