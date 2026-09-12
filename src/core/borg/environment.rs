@@ -5,11 +5,11 @@ use std::{collections::BTreeMap, ffi::OsString};
 /// deliberately have no Debug/Display implementation. The map is read-only.
 ///
 /// ```compile_fail
-/// use backupsage::borg::BorgEnvironment;
+/// use backupsage_core::borg::BorgEnvironment;
 /// fn inject(e: &mut BorgEnvironment<'_>) { e.env("BORG_REPO", "other"); }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::BorgEnvironment;
+/// use backupsage_core::borg::BorgEnvironment;
 /// fn inject(e: &mut BorgEnvironment<'_>) { e.as_map().insert("X".into(), "Y".into()); }
 /// ```
 pub struct BorgEnvironment<'a> {

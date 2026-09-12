@@ -61,7 +61,7 @@ impl Fixture {
         let helper = self.dir.path().join("credential-helper.py");
         fs::write(
             &helper,
-            include_bytes!("../../tests/common/borg_credential.py"),
+            include_bytes!("../../../tests/common/borg_credential.py"),
         )
         .unwrap();
         format!(
@@ -197,7 +197,11 @@ fn mock_backend_exact_argv_and_detached_argument_injection() {
 fn fake(f: &Fixture, scenario: &str) -> PathBuf {
     fs::write(f.source.join("scenario"), scenario).unwrap();
     let exe = f.dir.path().join("fake-borg");
-    fs::write(&exe, include_bytes!("../../tests/common/borg_hostile.py")).unwrap();
+    fs::write(
+        &exe,
+        include_bytes!("../../../tests/common/borg_hostile.py"),
+    )
+    .unwrap();
     fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
     exe
 }

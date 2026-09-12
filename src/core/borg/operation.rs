@@ -48,33 +48,33 @@ enum Profile {
 /// No command/argv builder, shell or extraction-to-disk variant is exposed.
 ///
 /// ```compile_fail
-/// use backupsage::borg::{Operation, VerifiedImmutableSnapshot};
+/// use backupsage_core::borg::{Operation, VerifiedImmutableSnapshot};
 /// fn inject(s: &VerifiedImmutableSnapshot) {
 ///     Operation::repository_metadata(s).arg("--repair");
 /// }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::{Operation, VerifiedImmutableSnapshot};
+/// use backupsage_core::borg::{Operation, VerifiedImmutableSnapshot};
 /// fn inject(s: &VerifiedImmutableSnapshot) { Operation::new(s, "delete", ["--force"]); }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::{Operation, VerifiedImmutableSnapshot};
+/// use backupsage_core::borg::{Operation, VerifiedImmutableSnapshot};
 /// fn inject(s: &VerifiedImmutableSnapshot) { Operation::repository_metadata(s).format("{path}"); }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::{Operation, ArchiveName, RegularFilePath, VerifiedImmutableSnapshot};
+/// use backupsage_core::borg::{Operation, ArchiveName, RegularFilePath, VerifiedImmutableSnapshot};
 /// fn inject(s: &VerifiedImmutableSnapshot, a: ArchiveName, p: RegularFilePath) {
 ///     Operation::extract_file(s, a, vec![p]);
 /// }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::{Operation, VerifiedImmutableSnapshot};
+/// use backupsage_core::borg::{Operation, VerifiedImmutableSnapshot};
 /// fn inject(s: &VerifiedImmutableSnapshot) {
 ///     Operation::repository_metadata(s).stdout(false);
 /// }
 /// ```
 /// ```compile_fail
-/// use backupsage::borg::Runtime;
+/// use backupsage_core::borg::Runtime;
 /// let _ = Runtime::new("/bin/sh", ["-c", "arbitrary command"]);
 /// ```
 pub struct Operation<'a> {

@@ -203,13 +203,30 @@ name = "backupsage"
 version = "1.0.2"
 dependencies = [
  "anyhow",
+ "backupsage-core",
  "blake3",
  "clap",
  "comfy-table",
  "flate2",
- "getrandom",
  "image",
  "indicatif",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "zstd",
+]
+
+[[package]]
+name = "backupsage-core"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "flate2",
+ "getrandom",
+ "image",
  "jsonschema",
  "kamadak-exif",
  "libc",
@@ -220,6 +237,13 @@ dependencies = [
  "tempfile",
  "walkdir",
  "zstd",
+]
+
+[[package]]
+name = "backupsage-web"
+version = "1.0.2"
+dependencies = [
+ "backupsage-core",
 ]
 
 [[package]]

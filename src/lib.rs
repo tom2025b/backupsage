@@ -1,24 +1,10 @@
-//! BackupSage — index and search text inside tar backups without extracting them.
+//! Compatibility facade for the `backupsage` CLI package.
 //!
-//! Split into a library so the pipeline is testable; `main.rs` only parses
-//! arguments and renders output.
+//! Shared implementations live in `backupsage-core`; these re-exports preserve
+//! existing library imports while frontends can depend on core directly.
 
-#[cfg(target_os = "linux")]
-pub mod borg;
-mod borg_guard;
+pub use backupsage_core::*;
+
 pub mod cli;
-pub mod dedup;
-pub mod exif_date;
-pub mod format;
-pub mod indexer;
-pub mod master;
-pub mod outpath;
-pub mod phash;
-pub mod plan;
-pub mod progress;
-pub mod report;
-pub mod searcher;
-pub mod source_dir;
-pub mod store;
 pub mod terminal;
 pub mod textsafe;
