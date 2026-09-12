@@ -8,22 +8,24 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
 use crate::indexer::{
-    create_db_with_fallback, process_reader, truncate_path, IndexOptions, IndexRun, IndexSummary,
+    create_db_with_fallback, process_reader_with_control, IndexOptions, IndexRun, IndexSummary,
 };
+use crate::progress::{OperationControl, ProgressEvent, ProgressUnit, SourceKind};
 use crate::store::{flags, EntryRecord};
 
 pub(crate) fn index_dir(
     dir: &Path,
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
+    control: &OperationControl<'_>,
 ) -> Result<IndexSummary> {
-    index_dir_after_count(dir, explicit_db, opts, || Ok(()))
+    index_dir_controlled(dir, explicit_db, opts, || Ok(()), control)
 }
 
+#[cfg(test)]
 fn index_dir_after_count<F>(
     dir: &Path,
     explicit_db: Option<&Path>,
@@ -33,7 +35,26 @@ fn index_dir_after_count<F>(
 where
     F: FnOnce() -> Result<()>,
 {
-    let (paths, conn) = create_db_with_fallback(dir, explicit_db, "dir", opts)?;
+    index_dir_controlled(
+        dir,
+        explicit_db,
+        opts,
+        after_count,
+        &OperationControl::default(),
+    )
+}
+
+fn index_dir_controlled<F>(
+    dir: &Path,
+    explicit_db: Option<&Path>,
+    opts: &IndexOptions,
+    after_count: F,
+    control: &OperationControl<'_>,
+) -> Result<IndexSummary>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let (paths, conn) = create_db_with_fallback(dir, explicit_db, "dir", opts, control)?;
     let db_path = paths.final_path.clone();
     // Names to skip during the walk: the final output and the staged
     // build (plus their live WAL/SHM siblings), in the output directory.
@@ -53,23 +74,22 @@ where
         .canonicalize()
         .ok();
 
-    println!("Source  : {} (directory)", dir.display());
-    println!("Index   : {}", db_path.display());
-    println!();
+    control.emit(ProgressEvent::IndexStarted {
+        source: dir,
+        destination: &db_path,
+        kind: SourceKind::Directory,
+    });
+    control.check_cancelled()?;
 
     // Cheap metadata-only pre-count so the bar has a total.  This is a
     // safety walk too: errors and nested Borg candidates abort instead of
     // being flattened away, before any content file is opened.
-    let total = count_entries(dir)?;
+    let total = count_entries_controlled(dir, control)?;
     after_count()?;
-    let pb = ProgressBar::new(total);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.cyan} [{elapsed_precise}] [{bar:45.cyan/blue}] {pos}/{len} files ({per_sec}, eta {eta}) — {msg}",
-        )
-        .unwrap_or_else(|_| ProgressStyle::default_bar())
-        .progress_chars("=>-"),
-    );
+    control.emit(ProgressEvent::Total {
+        amount: total,
+        unit: ProgressUnit::Files,
+    });
 
     let mut summary = IndexSummary {
         db_path: db_path.clone(),
@@ -86,6 +106,7 @@ where
         .sort_by_file_name()
         .into_iter();
     while let Some(walk_entry) = walker.next() {
+        control.check_cancelled()?;
         let walk_entry = walk_entry.context("cannot walk directory source")?;
         if walk_entry.file_type().is_dir() {
             if let Err(e) = crate::borg_guard::reject_borg_directory(walk_entry.path()) {
@@ -115,10 +136,12 @@ where
         };
 
         entry_no += 1;
-        pb.inc(1);
-        if entry_no % 64 == 1 {
-            pb.set_message(crate::textsafe::sanitize(&truncate_path(&rel_path, 50)).into_owned());
-        }
+        control.emit(ProgressEvent::Advanced { amount: 1 });
+        control.emit(ProgressEvent::Entry {
+            path: &rel_path,
+            number: entry_no,
+        });
+        control.check_cancelled()?;
 
         let md = walk_entry.metadata().ok();
         let mtime = md.as_ref().and_then(|m| {
@@ -188,19 +211,21 @@ where
             continue;
         }
         let outcome = match File::open(abs) {
-            Ok(mut f) => process_reader(&mut f, size, &rel_path, opts, &mut |msg| {
-                pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
-            }),
+            Ok(mut f) => process_reader_with_control(
+                &mut f,
+                size,
+                &rel_path,
+                opts,
+                &mut |msg| {
+                    control.emit(ProgressEvent::Warning { message: &msg });
+                },
+                control,
+            )?,
             Err(e) => {
                 // Unreadable file: warn-and-continue with a name-only row,
                 // mirroring the tar front-end's read-error handling.
-                pb.suspend(|| {
-                    eprintln!(
-                        "{}",
-                        crate::textsafe::sanitize(&format!(
-                            "warning: cannot open '{rel_path}': {e}"
-                        ))
-                    )
+                control.emit(ProgressEvent::Warning {
+                    message: &format!("warning: cannot open '{rel_path}': {e}"),
                 });
                 crate::indexer::EntryOutcome {
                     content_hash: None,
@@ -240,21 +265,30 @@ where
     }
 
     // Directories have no meaningful whole-source fingerprint in v1.0.
+    control.check_cancelled()?;
     run.finish(None)
         .context("failed to finalise directory index")?;
-    pb.finish_with_message("done");
+    control.emit(ProgressEvent::ReadyToPromote);
+    control.check_cancelled()?;
     drop(conn); // close the staged database before promoting it
     paths.promote()?;
+    control.emit(ProgressEvent::Finished);
     Ok(summary)
 }
 
+#[cfg(test)]
 fn count_entries(dir: &Path) -> Result<u64> {
+    count_entries_controlled(dir, &OperationControl::default())
+}
+
+fn count_entries_controlled(dir: &Path, control: &OperationControl<'_>) -> Result<u64> {
     let mut total = 0u64;
     let mut walker = WalkDir::new(dir)
         .follow_links(false)
         .min_depth(1)
         .into_iter();
     while let Some(entry) = walker.next() {
+        control.check_cancelled()?;
         let entry = entry.context("cannot pre-count directory source")?;
         if entry.file_type().is_dir() {
             if let Err(e) = crate::borg_guard::reject_borg_directory(entry.path()) {

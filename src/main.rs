@@ -29,6 +29,11 @@ fn main() {
 
 fn run() -> Result<i32> {
     let cli = Cli::parse();
+    let terminal = backupsage::terminal::TerminalProgress::default();
+    let control = backupsage::progress::OperationControl::new(
+        &terminal,
+        backupsage::progress::CancellationToken::default(),
+    );
     let master_path = cli
         .master
         .clone()
@@ -48,7 +53,12 @@ fn run() -> Result<i32> {
                     .expect("clap validates --mode values"),
             };
             for source in &args.sources {
-                let summary = indexer::run_index(source, args.index.as_deref(), &opts)?;
+                let summary = indexer::run_index_with_control(
+                    source,
+                    args.index.as_deref(),
+                    &opts,
+                    &control,
+                )?;
                 print_index_summary(&summary);
                 if !master_path.exists() {
                     println!(
@@ -106,8 +116,11 @@ fn run() -> Result<i32> {
         }
 
         Commands::Search(args) => {
-            let db_path =
-                searcher::discover_db_path(args.index.as_deref(), args.archive.as_deref())?;
+            let db_path = searcher::discover_db_path_with_control(
+                args.index.as_deref(),
+                args.archive.as_deref(),
+                &control,
+            )?;
             let conn = searcher::open_index(&db_path)?;
             warn_if_incomplete(&conn);
 
@@ -151,8 +164,11 @@ fn run() -> Result<i32> {
         }
 
         Commands::Top(args) => {
-            let db_path =
-                searcher::discover_db_path(args.index.as_deref(), args.archive.as_deref())?;
+            let db_path = searcher::discover_db_path_with_control(
+                args.index.as_deref(),
+                args.archive.as_deref(),
+                &control,
+            )?;
             let conn = searcher::open_index(&db_path)?;
             warn_if_incomplete(&conn);
 
@@ -247,8 +263,11 @@ fn run() -> Result<i32> {
         }
 
         Commands::Inspect(args) => {
-            let db_path =
-                searcher::discover_db_path(args.index.as_deref(), args.archive.as_deref())?;
+            let db_path = searcher::discover_db_path_with_control(
+                args.index.as_deref(),
+                args.archive.as_deref(),
+                &control,
+            )?;
             let conn = searcher::open_index(&db_path)?;
             inspect_path(&conn, &db_path, &args.path)
         }

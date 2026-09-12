@@ -19,13 +19,13 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 
 use crate::exif_date::{self, MediaKind};
 use crate::format::{self, Format};
 use crate::outpath;
 use crate::phash;
+use crate::progress::{OperationControl, ProgressEvent, ProgressReader, ProgressUnit, SourceKind};
 use crate::store::{self, flags, EntryRecord, FinalizeCounts, SourceMeta};
 
 /// Bytes sampled from the start of each file for the null-byte binary check.
@@ -143,11 +143,38 @@ pub fn run_index(
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
 ) -> Result<IndexSummary> {
+    run_index_with_control(source, explicit_db, opts, &OperationControl::default())
+}
+
+/// Index with frontend-owned progress and cooperative cancellation.
+/// Cancellation leaves the previous completed index in place.
+pub fn run_index_with_control(
+    source: &Path,
+    explicit_db: Option<&Path>,
+    opts: &IndexOptions,
+    control: &OperationControl<'_>,
+) -> Result<IndexSummary> {
+    control.check_cancelled()?;
+    let result = run_index_controlled(source, explicit_db, opts, control);
+    // Preserve the typed cancellation cause even if a decoder wrapped the
+    // interrupted read in its own error. Successful promotion is final.
+    if result.is_err() {
+        control.check_cancelled()?;
+    }
+    result
+}
+
+fn run_index_controlled(
+    source: &Path,
+    explicit_db: Option<&Path>,
+    opts: &IndexOptions,
+    control: &OperationControl<'_>,
+) -> Result<IndexSummary> {
     crate::borg_guard::reject_borg_source(source)?;
     if source.is_dir() {
-        crate::source_dir::index_dir(source, explicit_db, opts)
+        crate::source_dir::index_dir(source, explicit_db, opts, control)
     } else {
-        index_tar(source, explicit_db, opts)
+        index_tar(source, explicit_db, opts, control)
     }
 }
 
@@ -171,13 +198,33 @@ pub(crate) struct EntryOutcome {
 
 /// Read one entry's content stream to EOF: hash every byte, retain the first
 /// `cap` bytes, classify, and extract media metadata.
-pub(crate) fn process_reader(
+#[cfg(test)]
+fn process_reader(
     reader: &mut dyn Read,
     declared_size: u64,
     path: &str,
     opts: &IndexOptions,
     warn: &mut dyn FnMut(String),
 ) -> EntryOutcome {
+    process_reader_with_control(
+        reader,
+        declared_size,
+        path,
+        opts,
+        warn,
+        &OperationControl::default(),
+    )
+    .expect("default control never cancels")
+}
+
+pub(crate) fn process_reader_with_control(
+    reader: &mut dyn Read,
+    declared_size: u64,
+    path: &str,
+    opts: &IndexOptions,
+    warn: &mut dyn FnMut(String),
+    control: &OperationControl<'_>,
+) -> Result<EntryOutcome> {
     let mk = exif_date::media_kind(path);
     let cap = if mk == MediaKind::Other {
         opts.max_file_size
@@ -205,7 +252,10 @@ pub(crate) fn process_reader(
     let mut chunk = [0u8; CHUNK];
     let mut total: u64 = 0;
     loop {
-        match reader.read(&mut chunk) {
+        control.check_cancelled()?;
+        let read = reader.read(&mut chunk);
+        control.check_cancelled()?;
+        match read {
             Ok(0) => break,
             Ok(n) => {
                 hasher.update(&chunk[..n]);
@@ -218,7 +268,7 @@ pub(crate) fn process_reader(
             Err(e) => {
                 warn(format!("warning: read error in '{path}': {e}"));
                 out.flags |= flags::READ_ERROR;
-                return out; // name-only row; a partial hash would be a lie
+                return Ok(out); // name-only row; a partial hash would be a lie
             }
         }
     }
@@ -227,7 +277,7 @@ pub(crate) fn process_reader(
     if total == 0 {
         out.kind = "empty";
         out.fts_text = Some(String::new());
-        return out;
+        return Ok(out);
     }
     let over_cap = total > cap;
 
@@ -279,7 +329,7 @@ pub(crate) fn process_reader(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 impl EntryOutcome {
@@ -503,6 +553,7 @@ pub(crate) fn create_db_with_fallback(
     explicit_db: Option<&Path>,
     meta_type: &str,
     opts: &IndexOptions,
+    control: &OperationControl<'_>,
 ) -> Result<(IndexPaths, Connection)> {
     let db_path = resolve_db_path(source, explicit_db);
     let meta = SourceMeta {
@@ -523,16 +574,13 @@ pub(crate) fn create_db_with_fallback(
         Ok(pair) => Ok(pair),
         Err(e) if explicit_db.is_none() => {
             let fallback = PathBuf::from(db_file_name(source));
-            // The chain can quote untrusted stored meta (a foreign index's
-            // "source" value) — sanitize the whole rendered message.
-            eprintln!(
-                "{}",
-                crate::textsafe::sanitize(&format!(
+            control.emit(ProgressEvent::Warning {
+                message: &format!(
                     "warning: cannot create index at '{}' ({e:#}) — using './{}'",
                     db_path.display(),
                     fallback.display()
-                ))
-            );
+                ),
+            });
             create_staged_db(&fallback, &meta, &protected)
         }
         Err(e) => Err(e),
@@ -567,17 +615,17 @@ impl<R: Read> Read for HashingReader<R> {
     }
 }
 
-type TarInner = BufReader<HashingReader<indicatif::ProgressBarIter<File>>>;
+type TarInner<'a> = BufReader<HashingReader<ProgressReader<'a, File>>>;
 
 /// Concrete decompressor so the compressed stream can be recovered and
 /// drained after tar iteration (the archive-fingerprint contract).
-enum Decoder {
-    Zstd(zstd::Decoder<'static, TarInner>),
-    Gzip(flate2::read::MultiGzDecoder<TarInner>),
-    Plain(TarInner),
+enum Decoder<'a> {
+    Zstd(zstd::Decoder<'static, TarInner<'a>>),
+    Gzip(flate2::read::MultiGzDecoder<TarInner<'a>>),
+    Plain(TarInner<'a>),
 }
 
-impl Read for Decoder {
+impl Read for Decoder<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Decoder::Zstd(r) => r.read(buf),
@@ -587,8 +635,8 @@ impl Read for Decoder {
     }
 }
 
-impl Decoder {
-    fn into_compressed(self) -> TarInner {
+impl<'a> Decoder<'a> {
+    fn into_compressed(self) -> TarInner<'a> {
         match self {
             Decoder::Zstd(r) => r.finish(),
             Decoder::Gzip(r) => r.into_inner(),
@@ -601,29 +649,31 @@ fn index_tar(
     archive_path: &Path,
     explicit_db: Option<&Path>,
     opts: &IndexOptions,
+    control: &OperationControl<'_>,
 ) -> Result<IndexSummary> {
     let fmt = format::detect_file(archive_path)?;
-    let (paths, conn) = create_db_with_fallback(archive_path, explicit_db, "tar", opts)?;
+    let (paths, conn) = create_db_with_fallback(archive_path, explicit_db, "tar", opts, control)?;
     let db_path = paths.final_path.clone();
 
-    println!("Archive : {} ({fmt})", archive_path.display());
-    println!("Index   : {}", db_path.display());
-    println!();
+    control.emit(ProgressEvent::IndexStarted {
+        source: archive_path,
+        destination: &db_path,
+        kind: SourceKind::Archive(fmt),
+    });
+    control.check_cancelled()?;
 
     let archive_file = File::open(archive_path)
         .with_context(|| format!("cannot open archive: {}", archive_path.display()))?;
     let total_bytes = archive_file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let pb = ProgressBar::new(total_bytes);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.cyan} [{elapsed_precise}] [{bar:45.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta}) — {msg}",
-        )
-        .unwrap_or_else(|_| ProgressStyle::default_bar())
-        .progress_chars("=>-"),
-    );
-
-    let hashing = HashingReader::new(pb.wrap_read(archive_file));
+    control.emit(ProgressEvent::Total {
+        amount: total_bytes,
+        unit: ProgressUnit::Bytes,
+    });
+    let hashing = HashingReader::new(ProgressReader {
+        inner: archive_file,
+        control,
+    });
     let tracked: TarInner = BufReader::with_capacity(CHUNK, hashing);
     let decoder = match fmt {
         Format::Zstd => Decoder::Zstd(
@@ -647,6 +697,7 @@ fn index_tar(
         .entries()
         .context("failed to read tar entries")?
     {
+        control.check_cancelled()?;
         // A corrupt entry header is fatal: tar's iterator cannot resync past
         // it, so "skip and continue" would silently drop the rest of the
         // archive. Bail — completed stays 0 and later searches warn.
@@ -673,9 +724,11 @@ fn index_tar(
         let (entry_path, path_raw) = store::capture_text(&entry.path_bytes());
 
         entry_no += 1;
-        if entry_no % 64 == 1 {
-            pb.set_message(crate::textsafe::sanitize(&truncate_path(&entry_path, 50)).into_owned());
-        }
+        control.emit(ProgressEvent::Entry {
+            path: &entry_path,
+            number: entry_no,
+        });
+        control.check_cancelled()?;
 
         let mtime = entry.header().mtime().ok().map(|m| m as i64);
         let mode = entry.header().mode().ok();
@@ -852,9 +905,16 @@ fn index_tar(
             run.summary.files_sparse_unsupported += 1;
             continue;
         }
-        let mut outcome = process_reader(&mut entry, size, &entry_path, opts, &mut |msg| {
-            pb.suspend(|| eprintln!("{}", crate::textsafe::sanitize(&msg)))
-        });
+        let mut outcome = process_reader_with_control(
+            &mut entry,
+            size,
+            &entry_path,
+            opts,
+            &mut |msg| {
+                control.emit(ProgressEvent::Warning { message: &msg });
+            },
+            control,
+        )?;
         outcome.flags |= extra_flags;
 
         let rec = EntryRecord {
@@ -887,10 +947,13 @@ fn index_tar(
         .context("failed to drain archive tail for fingerprint")?;
     let archive_blake3 = compressed.into_inner().finalize_hex();
 
+    control.check_cancelled()?;
     run.finish(Some(&archive_blake3))?;
-    pb.finish_with_message("done");
+    control.emit(ProgressEvent::ReadyToPromote);
+    control.check_cancelled()?;
     drop(conn); // close the staged database before promoting it
     paths.promote()?;
+    control.emit(ProgressEvent::Finished);
     Ok(summary)
 }
 
@@ -958,7 +1021,6 @@ fn is_binary(data: &[u8]) -> bool {
     data.contains(&0)
 }
 
-/// Truncate a path to `max_chars` characters, keeping the tail visible.
 /// Kind classification without reading content — metadata-only mode (#39):
 /// media kinds from the file name, everything else "binary" ("empty" at
 /// size 0). Never claims "text"; that would imply the content was probed.
@@ -974,18 +1036,45 @@ pub(crate) fn metadata_kind(path: &str, size: u64) -> &'static str {
     }
 }
 
-pub(crate) fn truncate_path(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_string();
-    }
-    let tail: String = s.chars().skip(count + 1 - max_chars).collect();
-    format!("…{tail}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_during_content_read_is_not_downgraded_to_a_warning() {
+        use crate::progress::{CancellationToken, Cancelled};
+        struct CancellingReader {
+            token: CancellationToken,
+            reads: usize,
+        }
+        impl Read for CancellingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                self.reads += 1;
+                self.token.cancel();
+                buf.fill(b'a');
+                Ok(buf.len())
+            }
+        }
+        let token = CancellationToken::default();
+        struct Ignore;
+        impl crate::progress::ProgressObserver for Ignore {
+            fn on_event(&self, _: ProgressEvent<'_>) {}
+        }
+        let control = OperationControl::new(&Ignore, token.clone());
+        let mut reader = CancellingReader { token, reads: 0 };
+        let mut warnings = Vec::new();
+        let result = process_reader_with_control(
+            &mut reader,
+            1024 * 1024,
+            "large.txt",
+            &IndexOptions::default(),
+            &mut |message| warnings.push(message),
+            &control,
+        );
+        assert!(result.err().unwrap().is::<Cancelled>());
+        assert_eq!(reader.reads, 1);
+        assert!(warnings.is_empty());
+    }
 
     #[test]
     fn binary_detection() {
@@ -1020,15 +1109,6 @@ mod tests {
         accumulate_words("apple banana", &mut acc);
         assert_eq!(acc.get("apple"), Some(&(3, 2)));
         assert_eq!(acc.get("banana"), Some(&(1, 1)));
-    }
-
-    #[test]
-    fn truncate_keeps_tail() {
-        assert_eq!(truncate_path("short", 10), "short");
-        let t = truncate_path("a/very/long/path/to/some/file.txt", 12);
-        assert_eq!(t.chars().count(), 12);
-        assert!(t.starts_with('…'));
-        assert!(t.ends_with("file.txt"));
     }
 
     #[test]
