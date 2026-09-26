@@ -3,7 +3,7 @@
 
 use backupsage::coverage::{
     group, Coverage, CoverageRow, CoverageSource, EntryKind, ExclusionReason, RowRef,
-    SourceEvidence,
+    SourceEvidence, UnknownContentReason,
 };
 use backupsage::floors::{
     evaluate, FloorParams, FloorReport, GroupExclusionReason, GroupFloor, SourceStatus, Verdict,
@@ -87,6 +87,13 @@ fn eval(c: &Coverage, statuses: &[(i64, SourceStatus)], p: &FloorParams) -> Floo
     assert_eq!(s.min_copies, p.min_copies);
     assert_eq!(s.groups, r.groups.len());
     assert_eq!(s.meets_floor + s.below_floor + s.inconclusive, s.groups);
+    let emitted_aliases: usize = r.groups.iter().map(|g| g.aliases.len()).sum::<usize>()
+        + r.excluded_groups
+            .iter()
+            .map(|g| g.aliases.len())
+            .sum::<usize>();
+    assert_eq!(s.hardlink_aliases, emitted_aliases);
+    assert_eq!(s.unknown_content_rows, r.unknown_content.len());
     for g in &r.groups {
         if g.only_copy {
             assert_eq!(g.trusted_replicas, 1);
@@ -237,6 +244,28 @@ fn only_ok_and_incomplete_sources_count_toward_the_floor() {
 }
 
 #[test]
+fn unknown_presence_in_an_untrusted_source_is_still_inconclusive() {
+    // One trusted copy plus an unavailable source of any untrusted status:
+    // the unknown presence must not vanish into a false below-floor alarm.
+    for status in [
+        SourceStatus::StaleIndex,
+        SourceStatus::DbMissing,
+        SourceStatus::ArchiveMissing,
+    ] {
+        let c = cov(&[
+            complete(1, vec![file(1, "a", 1, 5)]),
+            source(2, SourceEvidence::Unavailable, vec![]),
+        ]);
+        let r = eval(&c, &[(1, SourceStatus::Ok), (2, status)], &floor(2));
+        let g = only(&r);
+        assert_eq!(g.verdict, Verdict::Inconclusive, "{status:?}");
+        assert!(!g.only_copy, "{status:?}");
+        assert_eq!(g.unknown_sources, 1, "{status:?}");
+        assert_eq!(r.summary.below_floor, 0, "{status:?}");
+    }
+}
+
+#[test]
 fn every_copy_is_listed_with_label_and_status_trusted_or_not() {
     let c = cov(&[
         complete(1, vec![file(1, "a", 1, 5), file(2, "a2", 1, 5)]),
@@ -362,6 +391,64 @@ fn unknown_length_is_never_excluded_by_size() {
     let r = eval(&c, &all_ok(&c), &p);
     assert_eq!(only(&r).size, None);
     assert!(r.excluded_groups.is_empty());
+}
+
+#[test]
+fn alias_rows_are_listed_for_in_scope_and_excluded_groups() {
+    let c = cov(&[complete(
+        1,
+        vec![
+            file(1, "f", 1, 5),
+            row(2, "l", EntryKind::Hardlink, Some(1)),
+            file(3, "e", 0, 0),
+            row(4, "el", EntryKind::Hardlink, Some(0)),
+        ],
+    )]);
+    // Empty content is out of scope by default; its alias must survive too.
+    let r = eval(&c, &all_ok(&c), &floor(1));
+    assert_eq!(only(&r).aliases, vec![rref(1, "l", 2)]);
+    assert_eq!(r.excluded_groups.len(), 1);
+    assert_eq!(r.excluded_groups[0].aliases, vec![rref(1, "el", 4)]);
+    assert_eq!(r.summary.hardlink_aliases, 2);
+}
+
+#[test]
+fn unknown_content_rows_keep_their_paths_sizes_and_reasons() {
+    let mut read_error = unhashed(2, "broken", 5);
+    read_error.flags = flags::READ_ERROR;
+    let mut sparse = unhashed(3, "sparse", 6);
+    sparse.flags = flags::SPARSE;
+    let c = cov(&[
+        complete(1, vec![file(1, "a", 1, 5), read_error, sparse]),
+        complete(2, vec![unhashed(1, "plain", 7)]),
+    ]);
+    let r = eval(&c, &all_ok(&c), &floor(1));
+    let got: Vec<_> = r
+        .unknown_content
+        .iter()
+        .map(|u| (u.row.clone(), u.size, u.reason))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                rref(1, "broken", 2),
+                Some(5),
+                UnknownContentReason::ReadError
+            ),
+            (
+                rref(1, "sparse", 3),
+                Some(6),
+                UnknownContentReason::UnsupportedSparse
+            ),
+            (
+                rref(2, "plain", 1),
+                Some(7),
+                UnknownContentReason::NotHashed
+            ),
+        ]
+    );
+    assert_eq!(r.summary.unknown_content_rows, 3);
 }
 
 #[test]

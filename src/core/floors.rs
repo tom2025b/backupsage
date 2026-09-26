@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 
-use crate::coverage::{Coverage, Exclusion, ExclusionReason, Presence, RowRef};
+use crate::coverage::{Coverage, Exclusion, ExclusionReason, Presence, RowRef, UnknownContent};
 
 /// Replicas wanted per content when the caller does not choose.
 pub const DEFAULT_MIN_COPIES: usize = 2;
@@ -90,6 +90,8 @@ pub struct GroupFloor {
     pub unknown_sources: usize,
     /// Every copy, trusted or not, sorted by (source id, raw path, file id).
     pub copies: Vec<FloorCopy>,
+    /// Hardlinks sharing a same-source copy's bytes; listed, never counted.
+    pub aliases: Vec<RowRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +107,7 @@ pub struct GroupExclusion {
     pub size: Option<u64>,
     pub reason: GroupExclusionReason,
     pub copies: Vec<RowRef>,
+    pub aliases: Vec<RowRef>,
 }
 
 /// Totals derived from the emitted rows.
@@ -132,6 +135,8 @@ pub struct FloorReport {
     pub excluded_groups: Vec<GroupExclusion>,
     /// The engine's row exclusions, unchanged.
     pub excluded_rows: Vec<Exclusion>,
+    /// The engine's unknown-content rows with their reasons, unchanged.
+    pub unknown_content: Vec<UnknownContent>,
     pub summary: FloorSummary,
 }
 
@@ -180,6 +185,7 @@ pub fn evaluate(
                 size: group.size,
                 reason,
                 copies: group.copies.clone(),
+                aliases: Vec::new(),
             });
             continue;
         }
@@ -228,6 +234,7 @@ pub fn evaluate(
             untrusted_replicas: untrusted,
             unknown_sources: unknown,
             copies,
+            aliases: Vec::new(),
         });
     }
 
@@ -257,6 +264,7 @@ pub fn evaluate(
         groups,
         excluded_groups,
         excluded_rows: coverage.exclusions.clone(),
+        unknown_content: Vec::new(),
         summary,
     })
 }
