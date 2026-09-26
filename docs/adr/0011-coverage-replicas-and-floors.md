@@ -46,14 +46,19 @@ the replica count a lower bound (`AtLeast`).
    hardlink) keep theirs. The summary counts all of them from those lists.
 6. Group order follows the engine (content hash); copy order follows the
    engine (source id, raw path, file id). Totals derive from the emitted rows.
+7. **Protected/reference copies (Tom's decision, 2026-09-26).** Protected or
+   reference designation is caller-supplied source metadata, a role that is
+   independent of the source's status. A protected copy counts toward the
+   floor exactly like any other trusted copy: 1 ordinary + 1 protected copy
+   meets a floor of 2. The report shows protected copies separately: each
+   copy is marked `protected`, each group has `protected_replicas` (trusted
+   replicas on protected sources, also included in `trusted_replicas`), and
+   the summary totals them. Rule 2 is unchanged: a protected source whose
+   status is `stale-index`, `db-missing` or `archive-missing` is shown and
+   marked but not counted.
 
 ## Open decisions
 
-- **Protected/reference copies.** #96 asks for them to be reported distinctly
-  "with a documented rule for whether they count toward the floor", but neither
-  #96 nor #40 states that rule. No policy is invented here: sources carry no
-  protected/reference role yet, and every trusted copy counts the same way. The
-  owner needs to decide the rule before a role is added.
 - **Kind and path scope filters.** #96 lists kind and path exclusions. Coverage
   rows carry no kind, and #98 defines the command's filters "consistent with
   `dedup`". These filters are left to #98; only size and empty-content scope
@@ -62,7 +67,8 @@ the replica count a lower bound (`AtLeast`).
 ## Consequences
 
 `#97` must map every registry state onto a `SourceEvidence` and a
-`SourceStatus`; states outside rule 2's list need a decision there. Consumers
+`SourceStatus`, and load the protected/reference designation; states outside
+rule 2's list need a decision there. Consumers
 must render `inconclusive` distinctly from `below_floor` and must show
 untrusted copies.
 

@@ -206,11 +206,16 @@ pub fn evaluate(
             continue;
         }
 
-        let (mut trusted, mut untrusted, mut unknown) = (0, 0, 0);
+        let (mut trusted, mut untrusted, mut unknown, mut protected) = (0, 0, 0, 0);
         for p in &group.presence {
             match p.presence {
+                // A protected/reference copy counts like any trusted copy
+                // and is also tallied separately (Tom's rule, ADR 0011).
                 Presence::Present { .. } if status_of[&p.source_id].counts_toward_floor() => {
-                    trusted += 1
+                    trusted += 1;
+                    if protected_ids.contains(&p.source_id) {
+                        protected += 1;
+                    }
                 }
                 Presence::Present { .. } => untrusted += 1,
                 Presence::Unknown(_) => unknown += 1,
@@ -238,7 +243,7 @@ pub fn evaluate(
                     source_label: labels[&row.source_id].to_owned(),
                     status,
                     counts_toward_floor: status.counts_toward_floor(),
-                    protected: false,
+                    protected: protected_ids.contains(&row.source_id),
                 }
             })
             .collect();
@@ -249,7 +254,7 @@ pub fn evaluate(
             only_copy: trusted == 1 && unknown == 0,
             trusted_replicas: trusted,
             untrusted_replicas: untrusted,
-            protected_replicas: 0,
+            protected_replicas: protected,
             unknown_sources: unknown,
             copies,
             aliases: group.aliases.clone(),
@@ -272,7 +277,7 @@ pub fn evaluate(
         below_floor: count(Verdict::BelowFloor),
         inconclusive: count(Verdict::Inconclusive),
         only_copy: groups.iter().filter(|g| g.only_copy).count(),
-        protected_replicas: 0,
+        protected_replicas: groups.iter().map(|g| g.protected_replicas).sum(),
         excluded_groups: excluded_groups.len(),
         shadowed_rows: count_rows(ExclusionReason::Shadowed),
         symlink_rows: count_rows(ExclusionReason::Symlink),
