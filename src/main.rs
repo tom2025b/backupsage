@@ -1,7 +1,8 @@
 //! Entry point: parse the CLI, dispatch to the library, render results.
 //!
 //! Exit codes: 0 ok · 1 error · 2 completed but with skipped archives
-//! (offline / v2-limited / incomplete) — scripts can rely on this.
+//! (offline / v2-limited / incomplete), or a `diff` whose comparison is not
+//! complete — scripts can rely on this.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -9,6 +10,8 @@ use comfy_table::{Attribute, Cell, CellAlignment, Color, ContentArrangement, Tab
 
 use backupsage::cli::{Cli, Commands, MasterCommands};
 use backupsage::dedup::{self, DedupParams, SortKey};
+use backupsage::diff::{ChangeKind, SnapshotState};
+use backupsage::diff_input::{self, DiffDocument, MoveBlockerCause};
 use backupsage::indexer::{self, IndexOptions, IndexSummary};
 use backupsage::master::{self, Master};
 use backupsage::report::DedupReport;
@@ -270,6 +273,21 @@ fn run() -> Result<i32> {
             )?;
             let conn = searcher::open_index(&db_path)?;
             inspect_path(&conn, &db_path, &args.path)
+        }
+
+        Commands::Diff(args) => {
+            let (before, after, report) = diff_input::diff_indexes(&args.before, &args.after)?;
+            let document = DiffDocument::new(&report, &before, &after);
+            if args.json {
+                print!("{}", document.to_json()?);
+            } else {
+                print!("{}", render_diff(&document));
+            }
+            Ok(if report.comparison_state == SnapshotState::Complete {
+                0
+            } else {
+                2
+            })
         }
     }
 }
@@ -723,6 +741,179 @@ fn render_dedup_report(r: &DedupReport) -> String {
     for (label, reason) in &s.skipped_archives {
         let _ = writeln!(out, "skipped: {}: {}", sanitize(label), sanitize(reason));
     }
+    out
+}
+
+/// The snake_case name serde gives a unit enum variant, from
+/// `serde_json::to_value(variant)`.
+fn code_of(value: serde_json::Result<serde_json::Value>) -> String {
+    match value {
+        Ok(serde_json::Value::String(s)) => s,
+        _ => "?".into(),
+    }
+}
+
+/// Sanitized display path, plus the raw bytes when the display is lossy.
+fn diff_path(entry: &backupsage::diff::ReportEntry) -> String {
+    let shown = sanitize(&entry.path).into_owned();
+    if backupsage::report::to_hex(entry.path.as_bytes()) == entry.path_bytes {
+        shown
+    } else {
+        format!("{shown} [bytes {}]", entry.path_bytes)
+    }
+}
+
+fn blocker_text(cause: MoveBlockerCause, rows: Option<usize>) -> String {
+    let n = rows.unwrap_or(0);
+    let rows = |one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    match cause {
+        MoveBlockerCause::SnapshotUnavailable => "the index is unavailable".into(),
+        MoveBlockerCause::SnapshotIncompatible => "the index is incompatible".into(),
+        MoveBlockerCause::SnapshotIncomplete => {
+            "the index is incomplete, so no content can be proven unique".into()
+        }
+        MoveBlockerCause::Hardlink => format!(
+            "{}: a hardlink's bytes are not hashed independently",
+            rows("hardlink row", "hardlink rows")
+        ),
+        MoveBlockerCause::Symlink => format!(
+            "{}: a symlink has no content hash, and any row without one blocks moves",
+            rows("symlink row", "symlink rows")
+        ),
+        MoveBlockerCause::UnsupportedEntryType => {
+            rows("row of an unsupported type", "rows of an unsupported type")
+        }
+        MoveBlockerCause::ReadError => format!(
+            "{}: their content was not fully read",
+            rows("row with a read error", "rows with read errors")
+        ),
+        MoveBlockerCause::PaxUnparsed => format!(
+            "{}: tar-rs could not read some pax records (legal xattrs or names \
+             containing newlines do this too), so the stored hash may not cover \
+             the logical file",
+            rows(
+                "row with unparsed pax metadata",
+                "rows with unparsed pax metadata"
+            )
+        ),
+        MoveBlockerCause::UnsupportedSparse => format!(
+            "{}: indexed name-only, with no hash",
+            rows("unsupported PAX-sparse row", "unsupported PAX-sparse rows")
+        ),
+        MoveBlockerCause::NotHashed => {
+            rows("row without a content hash", "rows without a content hash")
+        }
+    }
+}
+
+/// Terminal rendering of `diff`. Deterministic: plain lines, no tables,
+/// every path sanitized. Byte-identical rows are counted, not listed.
+fn render_diff(doc: &DiffDocument) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let report = doc.report;
+    for (label, health, info) in [
+        ("before", doc.inputs.before, &report.before),
+        ("after", doc.inputs.after, &report.after),
+    ] {
+        let _ = writeln!(out, "{label}: {}", sanitize(&health.db_path));
+        let mut facts = vec![format!(
+            "index {}",
+            code_of(serde_json::to_value(info.state))
+        )];
+        if let Some(source) = &health.source {
+            facts.push(format!(
+                "source {} ({})",
+                sanitize(source),
+                sanitize(health.source_type.as_deref().unwrap_or("unknown type"))
+            ));
+        }
+        facts.push(format!(
+            "source currency {}",
+            code_of(serde_json::to_value(info.source_currency))
+        ));
+        let _ = writeln!(out, "  {}", facts.join(" · "));
+        for note in &health.notes {
+            let _ = writeln!(
+                out,
+                "  {}: {}",
+                code_of(serde_json::to_value(note.code)),
+                sanitize(&note.detail)
+            );
+        }
+    }
+    let _ = writeln!(
+        out,
+        "comparison: {}",
+        code_of(serde_json::to_value(report.comparison_state))
+    );
+    let _ = writeln!(out);
+
+    let listed: Vec<_> = report
+        .changes
+        .iter()
+        .filter(|c| c.kind != ChangeKind::ByteIdentical)
+        .collect();
+    if listed.is_empty() {
+        let _ = writeln!(out, "No changes to list.");
+    }
+    for change in listed {
+        let label = match change.kind {
+            ChangeKind::Added => "added",
+            ChangeKind::Removed => "removed",
+            ChangeKind::Moved => "moved",
+            ChangeKind::MetadataOnlyChanged => "metadata-only",
+            ChangeKind::ContentChanged => "content-changed",
+            ChangeKind::Inconclusive => "inconclusive",
+            ChangeKind::ByteIdentical => unreachable!("filtered above"),
+        };
+        let paths = match (&change.before, &change.after) {
+            (Some(old), Some(new)) if change.kind == ChangeKind::Moved => {
+                format!("{} -> {}", diff_path(old), diff_path(new))
+            }
+            (Some(entry), _) | (None, Some(entry)) => diff_path(entry),
+            (None, None) => unreachable!("a change has at least one side"),
+        };
+        let reason = if change.kind == ChangeKind::Inconclusive {
+            format!("  [{}]", code_of(serde_json::to_value(change.reason)))
+        } else {
+            String::new()
+        };
+        let _ = writeln!(out, "  {label:<16} {paths}{reason}");
+    }
+    let _ = writeln!(out);
+
+    let s = &report.summary;
+    let _ = writeln!(
+        out,
+        "{} added · {} removed · {} moved · {} byte-identical · {} metadata-only · \
+         {} content-changed · {} inconclusive · {} excluded (shadowed)",
+        s.added,
+        s.removed,
+        s.moved,
+        s.byte_identical,
+        s.metadata_only_changed,
+        s.content_changed,
+        s.inconclusive,
+        s.excluded
+    );
+    if doc.move_inference.enabled {
+        let _ = writeln!(out, "moves: inferred from unique content");
+    } else {
+        let _ = writeln!(out, "moves: not inferred");
+        for blocker in &doc.move_inference.blockers {
+            let _ = writeln!(
+                out,
+                "  {}: {}",
+                code_of(serde_json::to_value(blocker.side)),
+                blocker_text(blocker.cause, blocker.rows)
+            );
+        }
+    }
+    let _ = writeln!(
+        out,
+        "note: this compares the indexed snapshots; it does not re-read either source."
+    );
     out
 }
 

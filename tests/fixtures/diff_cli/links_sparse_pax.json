@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "<UUID-BEFORE>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "stat_matches"
+  },
+  "after": {
+    "index_uuid": "<UUID-AFTER>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "stat_matches"
+  },
+  "comparison_state": "incomplete",
+  "changes": [
+    {
+      "kind": "added",
+      "reason": "path_absent",
+      "before": null,
+      "after": {
+        "file_id": 5,
+        "path": "alias",
+        "path_bytes": "616c696173",
+        "entry_type": "hardlink",
+        "link_target_bytes": "6c696e6b65642e747874",
+        "size": 0,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:af59857322138b277bf8891de81a7d69a2c1152a3b3f34147c5b74678f5e945d",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "missing_content_evidence",
+      "before": {
+        "file_id": 2,
+        "path": "data/file.bin",
+        "path_bytes": "646174612f66696c652e62696e",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 22,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:3af13f1a3eb64326d535984d9a61296611ec95472911329dd2ad205d8b02c55c",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 3,
+        "path": "data/file.bin",
+        "path_bytes": "646174612f66696c652e62696e",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 40960,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 8
+      }
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 3,
+        "path": "linked.txt",
+        "path_bytes": "6c696e6b65642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 17,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:af59857322138b277bf8891de81a7d69a2c1152a3b3f34147c5b74678f5e945d",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 4,
+        "path": "linked.txt",
+        "path_bytes": "6c696e6b65642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 17,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:af59857322138b277bf8891de81a7d69a2c1152a3b3f34147c5b74678f5e945d",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "added",
+      "reason": "path_absent",
+      "before": null,
+      "after": {
+        "file_id": 1,
+        "path": "renamed-dst.bin",
+        "path_bytes": "72656e616d65642d6473742e62696e",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 20,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:6754f3b0ac8a44cc6085af2587afb02fbcd3c3b256b94834ff72d50b7cb4efda",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "removed",
+      "reason": "path_absent",
+      "before": {
+        "file_id": 1,
+        "path": "renamed-src.bin",
+        "path_bytes": "72656e616d65642d7372632e62696e",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 20,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:6754f3b0ac8a44cc6085af2587afb02fbcd3c3b256b94834ff72d50b7cb4efda",
+        "flags": 0
+      },
+      "after": null
+    },
+    {
+      "kind": "added",
+      "reason": "path_absent",
+      "before": null,
+      "after": {
+        "file_id": 6,
+        "path": "sym",
+        "path_bytes": "73796d",
+        "entry_type": "symlink",
+        "link_target_bytes": "6c696e6b65642e747874",
+        "size": 0,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 0
+      }
+    },
+    {
+      "kind": "added",
+      "reason": "path_absent",
+      "before": null,
+      "after": {
+        "file_id": 7,
+        "path": "xattred.txt",
+        "path_bytes": "786174747265642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 13,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:de1fa801ad2f2bb41debbe44d8499fb9a4098eff017d36407f1b23d2eec6f544",
+        "flags": 64
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "side": "after",
+      "reason": "shadowed_path",
+      "entry": {
+        "file_id": 2,
+        "path": "data/file.bin",
+        "path_bytes": "646174612f66696c652e62696e",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 22,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:3af13f1a3eb64326d535984d9a61296611ec95472911329dd2ad205d8b02c55c",
+        "flags": 16
+      }
+    }
+  ],
+  "summary": {
+    "added": 4,
+    "removed": 1,
+    "moved": 0,
+    "byte_identical": 1,
+    "metadata_only_changed": 0,
+    "content_changed": 0,
+    "inconclusive": 1,
+    "excluded": 1
+  },
+  "inputs": {
+    "before": {
+      "db_path": "<TMP>/links-before.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f6c696e6b732d6265666f72652e7461722e6462",
+      "source": "<TMP>/links-before.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 3,
+      "notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ]
+    },
+    "after": {
+      "db_path": "<TMP>/links-after.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f6c696e6b732d61667465722e7461722e6462",
+      "source": "<TMP>/links-after.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 7,
+      "notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ]
+    }
+  },
+  "move_inference": {
+    "enabled": false,
+    "blockers": [
+      {
+        "side": "after",
+        "cause": "hardlink",
+        "rows": 1
+      },
+      {
+        "side": "after",
+        "cause": "symlink",
+        "rows": 1
+      },
+      {
+        "side": "after",
+        "cause": "pax_unparsed",
+        "rows": 1
+      },
+      {
+        "side": "after",
+        "cause": "unsupported_sparse",
+        "rows": 1
+      }
+    ]
+  }
+}

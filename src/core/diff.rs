@@ -101,6 +101,9 @@ pub enum Reason {
     EqualContentDifferentMetadata,
     DifferentContent,
     MissingContentEvidence,
+    /// Both hashes are trusted and equal, but the recorded sizes differ:
+    /// the evidence contradicts itself, so neither equality nor change holds.
+    InconsistentContentEvidence,
     MissingMetadataEvidence,
     UnsupportedEntryType,
     OtherSnapshotIncomplete,
@@ -230,6 +233,10 @@ fn same_path(before: &Entry, after: &Entry) -> (ChangeKind, Reason) {
                 )
             }
         }
+        (Some(_), Some(_)) => (
+            ChangeKind::Inconclusive,
+            Reason::InconsistentContentEvidence,
+        ),
         _ => (ChangeKind::Inconclusive, Reason::MissingContentEvidence),
     }
 }

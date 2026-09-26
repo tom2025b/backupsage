@@ -1,0 +1,18 @@
+before: <TMP>/before.tar.db
+  index complete · source <TMP>/before.tar (tar) · source currency stat_matches
+  source_stat_matches: size and mtime match the index; the source was not re-hashed
+after: <TMP>/after.tar.db
+  index complete · source <TMP>/after.tar (tar) · source currency stat_matches
+  source_stat_matches: size and mtime match the index; the source was not re-hashed
+comparison: complete
+
+  added            added.txt
+  content-changed  content.txt
+  metadata-only    metadata.txt
+  moved            old-name.txt -> new-name.txt
+  content-changed  raw-� [bytes 7261772dfe]
+  removed          removed.txt
+
+1 added · 1 removed · 1 moved · 3 byte-identical · 1 metadata-only · 2 content-changed · 0 inconclusive · 1 excluded (shadowed)
+moves: inferred from unique content
+note: this compares the indexed snapshots; it does not re-read either source.

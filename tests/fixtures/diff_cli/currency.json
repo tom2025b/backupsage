@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "<UUID-BEFORE>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "stale"
+  },
+  "after": {
+    "index_uuid": "<UUID-AFTER>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "offline"
+  },
+  "comparison_state": "complete",
+  "changes": [
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 1,
+        "path": "f.txt",
+        "path_bytes": "662e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 3,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:d33fb48ab5adff269ae172b29a6913ff04f6f266207a7a8e976f2ecd571d4492",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 1,
+        "path": "f.txt",
+        "path_bytes": "662e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 3,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:d33fb48ab5adff269ae172b29a6913ff04f6f266207a7a8e976f2ecd571d4492",
+        "flags": 0
+      }
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "added": 0,
+    "removed": 0,
+    "moved": 0,
+    "byte_identical": 1,
+    "metadata_only_changed": 0,
+    "content_changed": 0,
+    "inconclusive": 0,
+    "excluded": 0
+  },
+  "inputs": {
+    "before": {
+      "db_path": "<TMP>/a.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f612e7461722e6462",
+      "source": "<TMP>/a.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 1,
+      "notes": [
+        {
+          "code": "source_stale",
+          "detail": "size or mtime differ from the index; the source changed since indexing"
+        }
+      ]
+    },
+    "after": {
+      "db_path": "<TMP>/b.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f622e7461722e6462",
+      "source": "<TMP>/b.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 1,
+      "notes": [
+        {
+          "code": "source_offline",
+          "detail": "the source is not reachable"
+        }
+      ]
+    }
+  },
+  "move_inference": {
+    "enabled": true,
+    "blockers": []
+  }
+}

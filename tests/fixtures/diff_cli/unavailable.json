@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": null,
+    "schema_version": null,
+    "hash_algo": null,
+    "state": "unavailable",
+    "source_currency": "not_checked"
+  },
+  "after": {
+    "index_uuid": "<UUID-AFTER>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "stat_matches"
+  },
+  "comparison_state": "unavailable",
+  "changes": [
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 5,
+        "path": "added.txt",
+        "path_bytes": "61646465642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:02ca7152b28b05997f1b574f7be14b1783700962cdb852636496ab5b5ca40a3b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 3,
+        "path": "content.txt",
+        "path_bytes": "636f6e74656e742e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:c9a85db01bc5e445f9f21710c11d1bc6a1072f2765ccb1e2364d81d0627f130b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 6,
+        "path": "dup.txt",
+        "path_bytes": "6475702e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:1f4880dbbc17196a7c251d81e2ef7f9063e8e3a7be7e0d0a9f71173e88f8d5f4",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 2,
+        "path": "metadata.txt",
+        "path_bytes": "6d657461646174612e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 384,
+        "content_hash": "b3:86f4caddd09ea5c9719018f9eaa0c9c94b9e705f03e1712c05f5639747ae2b07",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 4,
+        "path": "new-name.txt",
+        "path_bytes": "6e65772d6e616d652e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 18,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:06553fd33e7c4591f4e78c92358a2257a30c4fbef4e20ae863317fc1ec6da92b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 8,
+        "path": "raw-�",
+        "path_bytes": "7261772dfe",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:20010b7afaf2a89bdaba803f1cec37f6fd730136fb8e0b94d4dce07a05438dbb",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 7,
+        "path": "raw-�",
+        "path_bytes": "7261772dff",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 8,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:c35666d154baac27a5ab51d49ba9bea14ffde4778de33ba5713328d8a633ff1f",
+        "flags": 16
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 1,
+        "path": "unchanged.txt",
+        "path_bytes": "756e6368616e6765642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:9b3a7844b08ff425691a46ae4bf0e5ac77c23329f0ea4a4a69349189ca4ef0ca",
+        "flags": 0
+      }
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "added": 0,
+    "removed": 0,
+    "moved": 0,
+    "byte_identical": 0,
+    "metadata_only_changed": 0,
+    "content_changed": 0,
+    "inconclusive": 8,
+    "excluded": 0
+  },
+  "inputs": {
+    "before": {
+      "db_path": "<TMP>/missing.db",
+      "db_path_bytes": "<TMP-HEX>2f6d697373696e672e6462",
+      "source": null,
+      "source_type": null,
+      "content_mode": null,
+      "rows": 0,
+      "notes": [
+        {
+          "code": "index_missing",
+          "detail": "no index file at this path"
+        }
+      ]
+    },
+    "after": {
+      "db_path": "<TMP>/after.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f61667465722e7461722e6462",
+      "source": "<TMP>/after.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 8,
+      "notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ]
+    }
+  },
+  "move_inference": {
+    "enabled": false,
+    "blockers": [
+      {
+        "side": "before",
+        "cause": "snapshot_unavailable",
+        "rows": null
+      }
+    ]
+  }
+}

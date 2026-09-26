@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "<UUID-BEFORE>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "directory_unverified"
+  },
+  "after": {
+    "index_uuid": "<UUID-AFTER>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "directory_unverified"
+  },
+  "comparison_state": "complete",
+  "changes": [
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 1,
+        "path": "a.txt",
+        "path_bytes": "612e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:94d907389b631f90f34de6f00f1728cc3854e52f3e4820db7995a79e83817645",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 1,
+        "path": "a.txt",
+        "path_bytes": "612e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:94d907389b631f90f34de6f00f1728cc3854e52f3e4820db7995a79e83817645",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "moved",
+      "reason": "unique_content_correspondence",
+      "before": {
+        "file_id": 2,
+        "path": "moved-from.txt",
+        "path_bytes": "6d6f7665642d66726f6d2e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 15,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:25edbd73b485af410010c1cca65b97b6f95916129eb89a46d004e49fe58c4bee",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 2,
+        "path": "moved-to.txt",
+        "path_bytes": "6d6f7665642d746f2e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 15,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:25edbd73b485af410010c1cca65b97b6f95916129eb89a46d004e49fe58c4bee",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 3,
+        "path": "name-�",
+        "path_bytes": "6e616d652dff",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:02ee9d39a77fed0c320513ef0d7e35b93634a387c81d3848b84eddb3421f7e74",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 3,
+        "path": "name-�",
+        "path_bytes": "6e616d652dff",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:02ee9d39a77fed0c320513ef0d7e35b93634a387c81d3848b84eddb3421f7e74",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "content_changed",
+      "reason": "different_content",
+      "before": {
+        "file_id": 4,
+        "path": "sub/b.txt",
+        "path_bytes": "7375622f622e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:e14e2ab488dc0914a0247e9143cbe4ff4df81e995fd639deac09af7d3021fb7a",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 4,
+        "path": "sub/b.txt",
+        "path_bytes": "7375622f622e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 33188,
+        "content_hash": "b3:da340304b34692ca1b420bbf4586fa8ae119840b4137c9f94c01667bfc47953b",
+        "flags": 0
+      }
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "added": 0,
+    "removed": 0,
+    "moved": 1,
+    "byte_identical": 2,
+    "metadata_only_changed": 0,
+    "content_changed": 1,
+    "inconclusive": 0,
+    "excluded": 0
+  },
+  "inputs": {
+    "before": {
+      "db_path": "<TMP>/dir-before.db",
+      "db_path_bytes": "<TMP-HEX>2f6469722d6265666f72652e6462",
+      "source": "<TMP>/dir-before",
+      "source_type": "dir",
+      "content_mode": "full",
+      "rows": 4,
+      "notes": [
+        {
+          "code": "source_directory_unverified",
+          "detail": "a directory's own stat does not reflect changes to the files inside it"
+        }
+      ]
+    },
+    "after": {
+      "db_path": "<TMP>/dir-after.db",
+      "db_path_bytes": "<TMP-HEX>2f6469722d61667465722e6462",
+      "source": "<TMP>/dir-after",
+      "source_type": "dir",
+      "content_mode": "full",
+      "rows": 4,
+      "notes": [
+        {
+          "code": "source_directory_unverified",
+          "detail": "a directory's own stat does not reflect changes to the files inside it"
+        }
+      ]
+    }
+  },
+  "move_inference": {
+    "enabled": true,
+    "blockers": []
+  }
+}
