@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "before",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "not_checked"
+  },
+  "after": {
+    "index_uuid": "after",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "not_checked"
+  },
+  "comparison_state": "incomplete",
+  "changes": [
+    {
+      "kind": "inconclusive",
+      "reason": "unsupported_entry_type",
+      "before": {
+        "file_id": 2,
+        "path": "hardlink",
+        "path_bytes": "686172646c696e6b",
+        "entry_type": "hardlink",
+        "link_target_bytes": "7261772dff",
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:fbf5119bb83471365be716599cc0e71db5ad2240014abcc818af32d90f18d6b3",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 2,
+        "path": "hardlink",
+        "path_bytes": "686172646c696e6b",
+        "entry_type": "hardlink",
+        "link_target_bytes": "7261772dfe",
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:fbf5119bb83471365be716599cc0e71db5ad2240014abcc818af32d90f18d6b3",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 3,
+        "path": "logical-sparse",
+        "path_bytes": "6c6f676963616c2d737061727365",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:7558116631f01ed78054688a15e3a6d96f0209d6b1a1583a929eded1912b76a0",
+        "flags": 8
+      },
+      "after": {
+        "file_id": 3,
+        "path": "logical-sparse",
+        "path_bytes": "6c6f676963616c2d737061727365",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:7558116631f01ed78054688a15e3a6d96f0209d6b1a1583a929eded1912b76a0",
+        "flags": 8
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "missing_content_evidence",
+      "before": {
+        "file_id": 1,
+        "path": "metadata-only",
+        "path_bytes": "6d657461646174612d6f6e6c79",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 0
+      },
+      "after": {
+        "file_id": 1,
+        "path": "metadata-only",
+        "path_bytes": "6d657461646174612d6f6e6c79",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "missing_content_evidence",
+      "before": {
+        "file_id": 4,
+        "path": "unsupported-sparse",
+        "path_bytes": "756e737570706f727465642d737061727365",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 8
+      },
+      "after": {
+        "file_id": 4,
+        "path": "unsupported-sparse",
+        "path_bytes": "756e737570706f727465642d737061727365",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 12,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": null,
+        "flags": 8
+      }
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "added": 0,
+    "removed": 0,
+    "moved": 0,
+    "byte_identical": 1,
+    "metadata_only_changed": 0,
+    "content_changed": 0,
+    "inconclusive": 3,
+    "excluded": 0
+  }
+}

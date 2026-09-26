@@ -81,11 +81,11 @@ the v1.2 executor.
 
 **Issues:**
 
-- [ ] Freeze the immutable action-plan contract
-- [ ] Add source snapshot diff
-- [ ] Add coverage and replica-health reporting
-- [ ] Add read-only integrity checks
-- [ ] Generate organize, extract, and dedup plans without applying them
+- [x] Freeze the immutable action-plan contract (#12)
+- [ ] Add source snapshot diff (#13; engine #92, CLI #93)
+- [ ] Add coverage and replica-health reporting (#40)
+- [ ] Add read-only integrity checks (#15)
+- [ ] Generate organize, extract, and dedup plans without applying them (#16)
 
 **Exit gate:** commands have stable JSON fixtures and honest incomplete-data
 states; plans are deterministic; a regular persisted plan is reviewable before

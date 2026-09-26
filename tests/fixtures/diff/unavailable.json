@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "before",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "not_checked"
+  },
+  "after": {
+    "index_uuid": null,
+    "schema_version": null,
+    "hash_algo": null,
+    "state": "unavailable",
+    "source_currency": "not_checked"
+  },
+  "comparison_state": "unavailable",
+  "changes": [
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": {
+        "file_id": 1,
+        "path": "only",
+        "path_bytes": "6f6e6c79",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 4,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:28a249c2e4d3a92bc0a16ed8f1b5cf83ca20415ee12e502b096624902bbc97bd",
+        "flags": 0
+      },
+      "after": null
+    }
+  ],
+  "excluded": [],
+  "summary": {
+    "added": 0,
+    "removed": 0,
+    "moved": 0,
+    "byte_identical": 0,
+    "metadata_only_changed": 0,
+    "content_changed": 0,
+    "inconclusive": 1,
+    "excluded": 0
+  }
+}
