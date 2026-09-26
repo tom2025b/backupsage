@@ -84,10 +84,17 @@ and writes nothing beside any of them.
       cannot default to trusted);
     - an actual open for reading of the recorded path (a directory is
       opened and listed). A stat alone is not enough, since an unreadable
-      archive can keep the size and mtime its index recorded.
+      archive can keep the size and mtime its index recorded. Only the
+      recorded kind is ever opened: the path is stat'ed first, and
+      anything but a regular file (a directory, for a directory source)
+      is refused before any open, since a FIFO with no writer would block
+      the load forever. The open itself is nonblocking and the opened
+      handle is checked again, so a swap between the stat and the open can
+      neither hang the load nor pass as the archive.
 
     Any other source is `Unreachable`: offline, denied, never checked,
-    recorded under a lossy or relative path or none at all, or unreadable.
+    recorded under a lossy or relative path or none at all, replaced by
+    another kind of file, or unreadable.
     Its rows are listed as history, but its presence is unknown for every
     group. Its copies are never counted as present, and content it alone
     holds reads as an unknown lower bound (`AtLeast(0)`), never as zero

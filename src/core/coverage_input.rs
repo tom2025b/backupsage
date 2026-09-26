@@ -27,7 +27,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -382,12 +382,43 @@ fn source_readable(source: Option<&str>, source_type: Option<&str>) -> Result<()
     if !path.is_absolute() {
         return Err("the recorded source path is relative, so it cannot be opened".into());
     }
-    let opened = if source_type == Some("dir") {
-        fs::read_dir(path).map(|_| ())
-    } else {
-        fs::File::open(path).map(|_| ())
+    let want_dir = source_type == Some("dir");
+    let kind_ok = |t: fs::FileType| if want_dir { t.is_dir() } else { t.is_file() };
+    let wrong_kind = || {
+        if want_dir {
+            "the source path is not a directory, so it is not the indexed source".to_owned()
+        } else {
+            "the source path is not a regular file (a FIFO, device, socket or \
+             directory now stands there), so it is not the indexed archive"
+                .to_owned()
+        }
     };
-    opened.map_err(|e| format!("the source cannot be opened for reading: {e}"))
+    // The type check comes before any open: opening a FIFO with no writer
+    // blocks forever, and a device open can have side effects.
+    let meta =
+        fs::metadata(path).map_err(|e| format!("the source cannot be opened for reading: {e}"))?;
+    if !kind_ok(meta.file_type()) {
+        return Err(wrong_kind());
+    }
+    if want_dir {
+        return fs::read_dir(path)
+            .map(|_| ())
+            .map_err(|e| format!("the source cannot be opened for reading: {e}"));
+    }
+    // Nonblocking, and re-checked on the open handle, so a swap between the
+    // stat and the open can neither hang the load nor pass as the archive.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| format!("the source cannot be opened for reading: {e}"))?;
+    let opened = file
+        .metadata()
+        .map_err(|e| format!("the source cannot be opened for reading: {e}"))?;
+    if !kind_ok(opened.file_type()) {
+        return Err(wrong_kind());
+    }
+    Ok(())
 }
 
 /// What a registry status says about trust. `None` means it says nothing
