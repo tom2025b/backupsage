@@ -364,6 +364,86 @@ fn protected_source_with_an_untrusted_status_is_shown_but_not_counted() {
 }
 
 #[test]
+fn excluded_protected_copies_keep_their_mark_under_every_status() {
+    // A protected source whose only content is out of scope, either empty
+    // or below min_size, must still read as protected in the report.
+    let p = FloorParams {
+        min_copies: 2,
+        min_size: 10,
+        include_empty: false,
+    };
+    for (content, size, reason) in [
+        (0, 0, GroupExclusionReason::EmptyContent),
+        (7, 3, GroupExclusionReason::BelowMinSize),
+    ] {
+        for status in ALL_STATUSES {
+            let c = cov(&[
+                complete(1, vec![file(1, "ref", content, size)]),
+                complete(2, vec![file(1, "big", 9, 500)]),
+            ]);
+            let r = eval_protected(&c, &[(1, status), (2, SourceStatus::Ok)], &[1], &p);
+            let ex = &r.excluded_groups[0];
+            assert_eq!(ex.reason, reason, "{status:?}");
+            let copy = &ex.copies[0];
+            assert_eq!(copy.row, rref(1, "ref", 1), "{status:?}");
+            assert!(copy.protected, "{reason:?} {status:?}: protected mark lost");
+            assert_eq!(copy.status, status);
+            assert_eq!(copy.counts_toward_floor, status.counts_toward_floor());
+            assert_eq!(copy.source_label, "src-1");
+
+            let sources: Vec<_> = r
+                .sources
+                .iter()
+                .map(|s| (s.source_id, s.status, s.protected))
+                .collect();
+            assert_eq!(
+                sources,
+                vec![(1, status, true), (2, SourceStatus::Ok, false)],
+                "{reason:?} {status:?}"
+            );
+            // Out-of-scope content never enters the protected totals.
+            assert_eq!(r.summary.protected_replicas, 0);
+        }
+    }
+}
+
+#[test]
+fn source_list_keeps_designations_for_sources_without_copies() {
+    let c = cov(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        source(2, SourceEvidence::Unavailable, vec![]),
+        complete(3, vec![unhashed(1, "u", 9)]),
+    ]);
+    let statuses = [
+        (3, SourceStatus::StaleIndex),
+        (1, SourceStatus::Ok),
+        (2, SourceStatus::DbMissing),
+    ];
+    let r = eval_protected(&c, &statuses, &[3, 2], &floor(2));
+    let got: Vec<_> = r
+        .sources
+        .iter()
+        .map(|s| {
+            (
+                s.source_id,
+                s.label.as_str(),
+                s.status,
+                s.counts_toward_floor,
+                s.protected,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (1, "src-1", SourceStatus::Ok, true, false),
+            (2, "src-2", SourceStatus::DbMissing, false, true),
+            (3, "src-3", SourceStatus::StaleIndex, false, true),
+        ]
+    );
+}
+
+#[test]
 fn protected_designations_must_name_known_sources_once() {
     let c = cov(&[complete(1, vec![file(1, "a", 1, 5)]), complete(2, vec![])]);
     let p = floor(2);
@@ -456,7 +536,13 @@ fn empty_and_small_content_is_excluded_with_its_copies_listed() {
     let excluded: Vec<_> = r
         .excluded_groups
         .iter()
-        .map(|g| (g.content_hash, g.reason, g.copies.clone()))
+        .map(|g| {
+            (
+                g.content_hash,
+                g.reason,
+                g.copies.iter().map(|c| c.row.clone()).collect::<Vec<_>>(),
+            )
+        })
         .collect();
     assert_eq!(
         excluded,

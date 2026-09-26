@@ -111,8 +111,20 @@ pub struct GroupExclusion {
     pub content_hash: [u8; 32],
     pub size: Option<u64>,
     pub reason: GroupExclusionReason,
-    pub copies: Vec<RowRef>,
+    /// Every copy, marked like an in-scope group's copies.
+    pub copies: Vec<FloorCopy>,
     pub aliases: Vec<RowRef>,
+}
+
+/// A source as the report saw it: every designation survives here, whatever
+/// happened to its rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloorSource {
+    pub source_id: i64,
+    pub label: String,
+    pub status: SourceStatus,
+    pub counts_toward_floor: bool,
+    pub protected: bool,
 }
 
 /// Totals derived from the emitted rows.
@@ -136,6 +148,8 @@ pub struct FloorSummary {
 
 #[derive(Debug, Clone)]
 pub struct FloorReport {
+    /// Every source, in source-id order.
+    pub sources: Vec<FloorSource>,
     /// In-scope groups, in content-hash order.
     pub groups: Vec<GroupFloor>,
     /// Out-of-scope groups, in content-hash order.
@@ -200,7 +214,17 @@ pub fn evaluate(
                 content_hash: group.content_hash,
                 size: group.size,
                 reason,
-                copies: group.copies.clone(),
+                copies: group
+                    .copies
+                    .iter()
+                    .map(|row| FloorCopy {
+                        row: row.clone(),
+                        source_label: labels[&row.source_id].to_owned(),
+                        status: status_of[&row.source_id],
+                        counts_toward_floor: status_of[&row.source_id].counts_toward_floor(),
+                        protected: false,
+                    })
+                    .collect(),
                 aliases: group.aliases.clone(),
             });
             continue;
@@ -290,6 +314,7 @@ pub fn evaluate(
         unknown_content_rows: unknown_content.len(),
     };
     Ok(FloorReport {
+        sources: Vec::new(),
         groups,
         excluded_groups,
         excluded_rows: coverage.exclusions.clone(),
