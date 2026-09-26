@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use backupsage::coverage::{Presence, SourceEvidence, UnknownReason};
 use backupsage::coverage_input::{
-    build, load_from_indexes, load_from_master, load_registry, LoadCode, LoadedCoverage,
-    LoadedSource, RegistrySource,
+    build, load_from_indexes, load_from_master, load_registry, set_master_read_hook, LoadCode,
+    LoadedCoverage, LoadedSource, RegistrySource,
 };
 use backupsage::diff_input::{self, NoteCode, ReadPoint};
 use backupsage::floors::{FloorParams, SourceStatus, Verdict};
@@ -247,6 +247,7 @@ fn unknown_entry_type_refuses_the_index_rather_than_guessing() {
     assert_eq!(s.evidence, SourceEvidence::Unavailable);
     assert!(s.rows.is_empty());
     assert_eq!(s.notes[0].code, LoadCode::UnknownEntryType);
+    assert!(s.notes[0].detail.contains("files row"), "{:?}", s.notes);
     let report = loaded.floors(&[], &floor(2)).unwrap();
     assert_eq!(report.groups[0].verdict, Verdict::Inconclusive);
 }
@@ -266,6 +267,7 @@ fn metadata_only_index_with_a_hash_is_refused_as_contradictory() {
     let s = src(&loaded, 2);
     assert_eq!(s.evidence, SourceEvidence::Unavailable);
     assert_eq!(s.notes[0].code, LoadCode::ContradictoryContentMode);
+    assert!(s.notes[0].detail.contains("metadata-only"), "{:?}", s.notes);
 }
 
 // ── Invariant 2: nothing is written beside the master or any index ─────────
@@ -455,7 +457,7 @@ fn every_registry_state_maps_to_evidence_and_trust() {
         vec![
             ("ok", E::Complete, S::Ok),
             ("stale-index", E::Complete, S::StaleIndex),
-            ("archive-missing", E::Complete, S::ArchiveMissing),
+            ("archive-missing", E::Unreachable, S::ArchiveMissing),
             ("db-missing", E::Unavailable, S::DbMissing),
             ("ok", E::NoContentHashes, S::Ok),
             ("ok", E::Complete, S::Ok),
@@ -499,7 +501,7 @@ fn every_registry_state_maps_to_evidence_and_trust() {
     // db-missing, metadata-only and v2 sources are unknown, never absent.
     assert_eq!(g.trusted_replicas, 3);
     assert_eq!(g.protected_replicas, 1);
-    assert_eq!(g.unknown_sources, 3);
+    assert_eq!(g.unknown_sources, 4);
     assert_eq!(g.verdict, Verdict::MeetsFloor);
     let report = loaded.floors(&[6], &floor(4)).unwrap();
     assert_eq!(report.groups[0].verdict, Verdict::Inconclusive);
@@ -536,6 +538,7 @@ fn registry_status_only_ever_lowers_trust() {
     assert_eq!(s.registry_status.as_deref(), Some("stale-index"));
     assert_eq!(s.status, SourceStatus::StaleIndex);
     assert_eq!(s.notes[0].code, LoadCode::RegistryStatus);
+    assert!(s.notes[0].detail.contains("'stale-index'"), "{:?}", s.notes);
 
     // The live view lowers trust too: an ok registry entry whose archive
     // has since vanished is archive-missing.
@@ -544,6 +547,7 @@ fn registry_status_only_ever_lowers_trust() {
     fs::remove_file(&archive2).unwrap();
     let loaded = build(&registry(&[(1, "b", &db2)])).unwrap();
     assert_eq!(src(&loaded, 1).status, SourceStatus::ArchiveMissing);
+    assert_eq!(src(&loaded, 1).evidence, SourceEvidence::Unreachable);
 }
 
 #[test]
@@ -672,4 +676,142 @@ fn ad_hoc_indexes_load_in_argument_order_and_refuse_repeats() {
         .collect();
     assert_eq!(got, vec![(1, "b.tar.db", None), (2, "a.tar.db", None)]);
     assert!(load_from_indexes(&[a.clone(), a.clone()]).is_err());
+}
+
+// ── Review round 1 (codex, PR #103) ─────────────────────────────────────────
+
+/// Two archives holding SHARED, both indexed; returns (a index, b archive, b index).
+fn online_and_unplugged(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let a = tar(dir, "a.tar", &[(b"shared.txt", SHARED)]);
+    let b = tar(dir, "b.tar", &[(b"copy-of-shared", SHARED)]);
+    let (a_db, b_db) = (index(&a), index(&b));
+    (a_db, b, b_db)
+}
+
+#[test]
+fn unplugged_archive_beside_an_online_copy_is_inconclusive_not_only_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a_db, b, b_db) = online_and_unplugged(tmp.path());
+    fs::remove_file(&b).unwrap();
+    // No other source, so nothing unrelated can make the result unknown.
+    let loaded = build(&registry(&[(1, "a", &a_db), (2, "b", &b_db)])).unwrap();
+    let s = src(&loaded, 2);
+    assert_eq!(s.evidence, SourceEvidence::Unreachable);
+    assert_eq!(s.status, SourceStatus::ArchiveMissing);
+
+    let report = loaded.floors(&[], &floor(2)).unwrap();
+    let g = &report.groups[0];
+    assert_eq!(g.verdict, Verdict::Inconclusive);
+    assert!(
+        !g.only_copy,
+        "an unplugged copy made the online one only-copy"
+    );
+    assert_eq!(
+        (g.trusted_replicas, g.untrusted_replicas, g.unknown_sources),
+        (1, 0, 1)
+    );
+    assert_eq!(report.summary.below_floor, 0);
+    // The historical copy is still listed, and not counted.
+    let listed: Vec<_> = g
+        .copies
+        .iter()
+        .map(|c| (c.row.source_id, c.status, c.counts_toward_floor))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            (1, SourceStatus::Ok, true),
+            (2, SourceStatus::ArchiveMissing, false)
+        ]
+    );
+}
+
+#[test]
+fn unplugged_archive_alone_is_inconclusive_never_zero_copies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, b, b_db) = online_and_unplugged(tmp.path());
+    fs::remove_file(&b).unwrap();
+    let loaded = build(&registry(&[(1, "b", &b_db)])).unwrap();
+    for n in [1, 2] {
+        let report = loaded.floors(&[], &floor(n)).unwrap();
+        assert_eq!(report.groups.len(), 1, "content vanished from the report");
+        let g = &report.groups[0];
+        assert_eq!(g.verdict, Verdict::Inconclusive, "floor {n}");
+        assert_eq!((g.trusted_replicas, g.unknown_sources), (0, 1), "floor {n}");
+        assert!(!g.only_copy);
+        assert_eq!(report.summary.below_floor, 0);
+        assert_eq!(g.copies[0].row.source_id, 1);
+    }
+}
+
+#[test]
+fn copied_index_is_refused_rather_than_counted_as_a_second_replica() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, _) = pair(tmp.path());
+    let copy = tmp.path().join("a-copy.db");
+    fs::copy(&a, &copy).unwrap();
+    assert_eq!(digest_of(&a), digest_of(&copy));
+    let err = load_from_indexes(&[a.clone(), copy.clone()]).unwrap_err();
+    assert!(format!("{err:#}").contains("index_uuid"), "{err:#}");
+    let err = build(&registry(&[(1, "a", &a), (2, "copy", &copy)])).unwrap_err();
+    assert!(format!("{err:#}").contains("index_uuid"), "{err:#}");
+}
+
+#[test]
+fn alias_of_an_unreadable_index_is_refused_as_a_repeat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, b) = pair(tmp.path());
+    // Refused before its identity is read, so only the path can match.
+    let wal = altered_copy(&b, "wal.db", "PRAGMA journal_mode=WAL;");
+    let alias = tmp.path().join("alias.db");
+    std::os::unix::fs::symlink(&wal, &alias).unwrap();
+    let err = load_from_indexes(&[wal, alias]).unwrap_err();
+    assert!(format!("{err:#}").contains("more than once"), "{err:#}");
+}
+
+#[test]
+fn master_changed_during_the_read_is_refused() {
+    for (what, sidecar) in [("appended", false), ("sidecar", true)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, _) = pair(tmp.path());
+        let master = master_with(tmp.path(), &[&a]);
+        let target = master.clone();
+        set_master_read_hook(move || {
+            if sidecar {
+                let mut wal = target.as_os_str().to_owned();
+                wal.push("-wal");
+                fs::write(PathBuf::from(wal), b"").unwrap();
+            } else {
+                let mut f = fs::OpenOptions::new().append(true).open(&target).unwrap();
+                std::io::Write::write_all(&mut f, b"x").unwrap();
+            }
+        });
+        let err = load_registry(&master).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("changed while it was read"),
+            "{what}: {err:#}"
+        );
+    }
+}
+
+#[test]
+fn master_symlink_or_hard_link_is_refused_and_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, _) = pair(tmp.path());
+    let master = master_with(tmp.path(), &[&a]);
+    let link = tmp.path().join("master-link.db");
+    std::os::unix::fs::symlink(&master, &link).unwrap();
+    let before = tree_state(tmp.path());
+    let err = load_registry(&link).unwrap_err();
+    assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+    assert_eq!(before, tree_state(tmp.path()));
+
+    let hard = tmp.path().join("master-hard.db");
+    fs::hard_link(&master, &hard).unwrap();
+    let before = tree_state(tmp.path());
+    for path in [&master, &hard] {
+        let err = load_registry(path).unwrap_err();
+        assert!(format!("{err:#}").contains("hard links"), "{err:#}");
+    }
+    assert_eq!(before, tree_state(tmp.path()));
 }

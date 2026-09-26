@@ -28,6 +28,10 @@ pub enum SourceEvidence {
     Unavailable,
     /// Rows exist but carry no content hashes (metadata-only, v2-limited).
     NoContentHashes,
+    /// The rows are real history, but the source cannot be reached now:
+    /// its copies are listed, never counted as present, and its presence
+    /// is unknown for every group.
+    Unreachable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +104,7 @@ pub enum UnknownReason {
     SourceUnavailable,
     SourceIncomplete,
     SourceHasNoContentHashes,
+    SourceUnreachable,
     /// A complete source holds unhashed rows that could be this content.
     UnhashedRowsMayMatch {
         rows: usize,
@@ -438,7 +443,7 @@ fn presence_in(
         SourceEvidence::NoContentHashes => {
             Presence::Unknown(UnknownReason::SourceHasNoContentHashes)
         }
-        SourceEvidence::Complete => match unknown.could_match(size) {
+        SourceEvidence::Complete | SourceEvidence::Unreachable => match unknown.could_match(size) {
             0 => Presence::Absent,
             rows => Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows }),
         },

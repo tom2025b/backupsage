@@ -224,6 +224,13 @@ fn open_master_immutable(path: &Path) -> Result<Connection> {
     .with_context(|| format!("cannot open '{}' read-only", path.display()))
 }
 
+/// Test support: run `hook` once, on this thread, after the next master
+/// read and before its post-read guards.
+#[doc(hidden)]
+pub fn set_master_read_hook(hook: impl FnOnce() + 'static) {
+    let _ = hook;
+}
+
 /// Read the master's registry without writing anything beside it.
 pub fn load_registry(master_path: &Path) -> Result<Vec<RegistrySource>> {
     let before = check_master_file(master_path)?;

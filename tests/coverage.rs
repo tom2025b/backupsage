@@ -70,8 +70,14 @@ fn rref(source_id: i64, path: &str, file_id: i64) -> RowRef {
 fn run(sources: &[CoverageSource]) -> Coverage {
     let cov = group(sources).expect("valid input");
     for g in &cov.groups {
+        // Zero observed replicas is allowed only as a lower bound caused by
+        // an unreachable source whose historical rows hold the content.
+        let unreachable = g
+            .presence
+            .iter()
+            .any(|p| p.presence == Presence::Unknown(UnknownReason::SourceUnreachable));
         assert!(
-            g.replicas.observed() >= 1,
+            g.replicas.observed() >= 1 || (unreachable && !g.replicas.is_exact()),
             "a group must never report zero replicas: {g:?}"
         );
         assert_eq!(g.presence.len(), cov.sources.len());
@@ -823,4 +829,34 @@ fn five_byte_unhashed_row_leaves_empty_content_absent() {
     assert_eq!(find(&cov, 0).replicas, ReplicaCount::Exact(1));
     assert_eq!(cov.unknown_content.len(), 1);
     assert_eq!(cov.unknown_content[0].row, rref(2, "five", 1));
+}
+
+#[test]
+fn unreachable_source_lists_its_copies_but_proves_neither_presence_nor_absence() {
+    let cov = run(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        source(
+            2,
+            SourceEvidence::Unreachable,
+            vec![file(1, "b", 1, 5), file(2, "only-there", 2, 5)],
+        ),
+    ]);
+    let shared = find(&cov, 1);
+    assert_eq!(shared.copies, vec![rref(1, "a", 1), rref(2, "b", 1)]);
+    assert_eq!(
+        presence(&cov, 1, 2),
+        Presence::Unknown(UnknownReason::SourceUnreachable)
+    );
+    assert_eq!(shared.replicas, ReplicaCount::AtLeast(1));
+
+    // Content held only on the unreachable source is still listed, as an
+    // unknown lower bound, never as zero copies.
+    let only = find(&cov, 2);
+    assert_eq!(only.copies, vec![rref(2, "only-there", 2)]);
+    assert_eq!(only.replicas, ReplicaCount::AtLeast(0));
+    assert_eq!(presence(&cov, 2, 1), Presence::Absent);
+    assert_eq!(
+        presence(&cov, 2, 2),
+        Presence::Unknown(UnknownReason::SourceUnreachable)
+    );
 }
