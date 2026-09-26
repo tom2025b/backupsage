@@ -133,6 +133,7 @@ fn corpus(dir: &Path) -> Corpus {
     let b_tar = Tar::default()
         .file(b"copy/shared.txt", SHARED)
         .file(b"b-\xfe.bin", b"only in b, raw name")
+        .link(tar::EntryType::Symlink, b"a-sym", b"copy/shared.txt")
         .write(dir, "b.tar");
     let c_dir = dir.join("c-dir");
     write_file(&c_dir.join("deep/shared.txt"), SHARED);
@@ -474,7 +475,7 @@ fn clean_master_classifies_every_group_and_exits_0() {
         .iter()
         .map(|e| e["reason"].as_str().unwrap())
         .collect();
-    assert_eq!(reasons, ["shadowed", "symlink"]);
+    assert_eq!(reasons, ["shadowed", "symlink", "symlink"]);
     assert_eq!(
         group_by_path(&doc, "shared.txt")["aliases"][0]["path"],
         "alias-of-shared"
@@ -769,10 +770,10 @@ fn a_path_filter_never_removes_a_copy_from_the_count() {
         .file(b"x.bin", b"picture bytes")
         .write(tmp.path(), "a.tar");
     let b = Tar::default()
-        .file(b"x.jpg", b"picture bytes")
+        .file(b"x.JpG", b"picture bytes")
         .write(tmp.path(), "b.tar");
     let (a_db, b_db) = (index(&a), index(&b));
-    for flags in [&["--ext", "JPG"][..], &["--path-glob", "*.jpg"][..]] {
+    for flags in [&["--ext", "jpg"][..], &["--path-glob", "*.JpG"][..]] {
         let mut all = flags.to_vec();
         all.push("--json");
         let doc = json(&coverage_dbs(&[&a_db, &b_db], &all));
@@ -786,12 +787,12 @@ fn a_path_filter_never_removes_a_copy_from_the_count() {
             .iter()
             .map(|c| c["path"].as_str().unwrap())
             .collect();
-        assert_eq!(copies, ["x.bin", "x.jpg"], "{flags:?}");
+        assert_eq!(copies, ["x.bin", "x.JpG"], "{flags:?}");
     }
     // Like dedup: --ext folds ASCII case, GLOB does not.
     let doc = json(&coverage_dbs(
         &[&a_db, &b_db],
-        &["--path-glob", "*.JPG", "--json"],
+        &["--path-glob", "*.jpg", "--json"],
     ));
     assert_eq!(doc["summary"]["groups"], 0);
     // Choosing sources is different: it is the scope of the question.

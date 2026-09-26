@@ -66,7 +66,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 2,
+      "rows": 3,
       "index_notes": [
         {
           "code": "source_stat_matches",
@@ -407,6 +407,13 @@
       "path_bytes": "73796d",
       "file_id": 6,
       "reason": "symlink"
+    },
+    {
+      "source_id": 3,
+      "path": "a-sym",
+      "path_bytes": "612d73796d",
+      "file_id": 3,
+      "reason": "symlink"
     }
   ],
   "summary": {
@@ -422,7 +429,7 @@
     "excluded_groups": 1,
     "unknown_content_rows": 0,
     "shadowed_rows": 1,
-    "symlink_rows": 1,
+    "symlink_rows": 2,
     "unmatched_hardlink_rows": 0,
     "hardlink_aliases": 2
   }

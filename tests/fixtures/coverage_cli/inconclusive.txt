@@ -43,6 +43,6 @@ unknown content (1):
   5 e.tar  xattred.txt  [pax_unparsed]
 
 5 group(s) · 2 meet the floor · 0 below the floor · 3 inconclusive · 0 only-copy · 0 protected replica(s)
-not judged: 1 out-of-scope group(s) · 1 unknown-content row(s) · 1 shadowed · 1 symlink · 0 unmatched hardlink · 2 hardlink alias(es)
+not judged: 1 out-of-scope group(s) · 1 unknown-content row(s) · 1 shadowed · 2 symlink · 0 unmatched hardlink · 2 hardlink alias(es)
 note: 2 source(s) are not complete, ok sources; their copies may be listed but not counted
 note: this reads the indexes; it does not re-hash any source.

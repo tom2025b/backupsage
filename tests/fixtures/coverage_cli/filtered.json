@@ -49,7 +49,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 2,
+      "rows": 3,
       "index_notes": [
         {
           "code": "source_stat_matches",

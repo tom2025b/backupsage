@@ -23,5 +23,5 @@ below the floor (3):
     2 b.tar  b-�.bin [bytes 622dfe2e62696e]  [ok]
 
 5 group(s) · 2 meet the floor · 3 below the floor · 0 inconclusive · 3 only-copy · 0 protected replica(s)
-not judged: 1 out-of-scope group(s) · 0 unknown-content row(s) · 1 shadowed · 1 symlink · 0 unmatched hardlink · 2 hardlink alias(es)
+not judged: 1 out-of-scope group(s) · 0 unknown-content row(s) · 1 shadowed · 2 symlink · 0 unmatched hardlink · 2 hardlink alias(es)
 note: this reads the indexes; it does not re-hash any source.
