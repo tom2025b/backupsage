@@ -3,8 +3,6 @@
 //! No source I/O, index discovery, or actions occur here. Callers supply index
 //! evidence; availability/currency is reported separately from snapshot facts.
 //! See ADR 0010 for comparison, shadow and conservative move rules.
-//! last_edited_by: codex
-//! **Signed:** codex · 2026-09-26T12:05:09-04:00
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -198,10 +196,14 @@ fn compatible(info: &SnapshotInfo) -> bool {
         && info.state != SnapshotState::Incompatible
 }
 
+// The indexer's crafted PAX residual can hide sparse records and hash
+// condensed fragments instead of logical bytes (indexer.rs, #64).
+const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED;
+
 fn trusted_hash(entry: &Entry) -> Option<[u8; 32]> {
     // v3 hardlink hashes were copied by display-name lookup, and link sizes
     // need not describe target content. Do not promote them to byte evidence.
-    (entry.entry_type == EntryType::File && entry.flags & flags::READ_ERROR == 0)
+    (entry.entry_type == EntryType::File && entry.flags & UNTRUSTED_HASH == 0)
         .then_some(entry.content_hash)
         .flatten()
 }

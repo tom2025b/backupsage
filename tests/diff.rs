@@ -1,6 +1,4 @@
 //! Pure diff contract (#92). Index ingestion and CLI coverage belong to #93.
-//! last_edited_by: codex
-//! **Signed:** codex · 2026-09-26T12:05:09-04:00
 use std::path::Path;
 
 use backupsage::diff::{
@@ -253,6 +251,73 @@ fn change_rows(report: &diff::DiffReport) -> Vec<(Kind, RowIdentity<'_>, RowIden
             )
         })
         .collect()
+}
+
+#[test]
+fn pax_unparsed_hash_cannot_prove_moves() {
+    for (before_flags, after_flags) in [
+        (flags::PAX_UNPARSED, 0),
+        (0, flags::PAX_UNPARSED),
+        (flags::PAX_UNPARSED, flags::PAX_UNPARSED),
+    ] {
+        let mut before = snapshot("before", vec![entry(1, b"a", Some(b"fragments"))]);
+        let mut after = snapshot("after", vec![entry(2, b"b", Some(b"fragments"))]);
+        before.entries[0].flags = before_flags;
+        after.entries[0].flags = after_flags;
+        let report = diff::compare(&before, &after).unwrap();
+        assert_eq!(report.summary.moved, 0);
+        assert_eq!(
+            change_rows(&report),
+            vec![
+                (Kind::Removed, Some((1, "61")), None),
+                (Kind::Added, None, Some((2, "62"))),
+            ]
+        );
+        // Complete, compatible snapshots still prove raw-path absence;
+        // untrusted content prevents correspondence, not namespace claims.
+        assert!(report
+            .changes
+            .iter()
+            .all(|c| c.reason == Reason::PathAbsent));
+        assert_eq!(report.comparison_state, State::Complete);
+        assert!(report.excluded.is_empty());
+
+        // Unknown content also prevents global uniqueness for an otherwise
+        // trustworthy candidate elsewhere in either snapshot.
+        before.entries.push(entry(3, b"c", Some(b"logical bytes")));
+        after.entries.push(entry(4, b"d", Some(b"logical bytes")));
+        let report = diff::compare(&before, &after).unwrap();
+        assert_eq!(report.summary.moved, 0);
+        assert_eq!(
+            change_rows(&report),
+            vec![
+                (Kind::Removed, Some((1, "61")), None),
+                (Kind::Added, None, Some((2, "62"))),
+                (Kind::Removed, Some((3, "63")), None),
+                (Kind::Added, None, Some((4, "64"))),
+            ]
+        );
+    }
+}
+
+#[test]
+fn pax_unparsed_hash_cannot_prove_same_path_content_change() {
+    for (before_flags, after_flags) in [(flags::PAX_UNPARSED, 0), (0, flags::PAX_UNPARSED)] {
+        let mut before = snapshot("before", vec![entry(1, b"a", Some(b"fragments"))]);
+        let mut after = snapshot("after", vec![entry(2, b"a", Some(b"logical bytes"))]);
+        before.entries[0].flags = before_flags;
+        after.entries[0].flags = after_flags;
+        let report = diff::compare(&before, &after).unwrap();
+        assert_eq!(
+            change_rows(&report),
+            vec![(Kind::Inconclusive, Some((1, "61")), Some((2, "61")))],
+        );
+        assert_eq!(report.changes[0].reason, Reason::MissingContentEvidence);
+        assert_eq!(report.summary.content_changed, 0);
+        assert_eq!(report.summary.inconclusive, 1);
+        assert_eq!(report.comparison_state, State::Incomplete);
+        assert!(report.excluded.is_empty());
+    }
 }
 
 #[test]

@@ -38,7 +38,10 @@ The comparison rules, applied in order, are:
    only: v3 has no complete ownership, ACL or xattr evidence.
 2. Missing hashes, read errors, inconsistent equal-hash sizes or missing metadata
    produce `inconclusive` with a reason, rather than equality. `PAX_UNPARSED`
-   makes metadata unknown. FTS truncation and image-decoding flags do not weaken
+   makes metadata unknown. Its content hash is also untrusted because the indexer's
+   crafted PAX residual can hide sparse records and hash condensed fragments, so
+   it can prove neither equality, a content change, nor a move.
+   FTS truncation and image-decoding flags do not weaken
    a full file hash. A supported sparse entry's logical-stream hash can establish
    equality; unsupported sparse entries remain unknown.
 3. Hardlink and symlink byte comparisons are inconclusive. In particular, copied
@@ -96,3 +99,7 @@ Algorithm fixtures here do not substitute for that proof. #12's stale roadmap
 checkbox is corrected now; all four remaining milestone parents stay open.
 
 — codex
+
+last_edited_by: codex
+
+**Signed:** codex · 2026-09-26T12:14:55-04:00
