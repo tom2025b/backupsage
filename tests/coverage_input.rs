@@ -14,9 +14,10 @@ use std::path::{Path, PathBuf};
 
 use backupsage::coverage::{Presence, SourceEvidence, UnknownReason};
 use backupsage::coverage_input::{
-    build, load_from_indexes, load_from_master, load_registry, set_master_read_hook, LoadCode,
-    LoadedCoverage, LoadedSource, RegistrySource,
+    build, currency_can_show_presence, load_from_indexes, load_from_master, load_registry,
+    set_master_read_hook, LoadCode, LoadedCoverage, LoadedSource, RegistrySource,
 };
+use backupsage::diff::SourceCurrency;
 use backupsage::diff_input::{self, NoteCode, ReadPoint};
 use backupsage::floors::{FloorParams, SourceStatus, Verdict};
 use backupsage::indexer::{self, ContentMode, IndexOptions};
@@ -154,7 +155,9 @@ fn assert_refused(loaded: &LoadedCoverage, id: i64, code: NoteCode, what: &str) 
     assert_eq!(s.evidence, SourceEvidence::Unavailable, "{what}");
     assert!(s.rows.is_empty(), "{what}: refused index carried rows");
     assert!(
-        s.index_notes.iter().any(|n| n.code == code),
+        s.index_notes
+            .iter()
+            .any(|n| n.code == code && !n.detail.is_empty()),
         "{what}: {:?}",
         s.index_notes
     );
@@ -814,4 +817,108 @@ fn master_symlink_or_hard_link_is_refused_and_left_alone() {
         assert!(format!("{err:#}").contains("hard links"), "{err:#}");
     }
     assert_eq!(before, tree_state(tmp.path()));
+}
+
+// ── Review round 2 (codex, PR #103): presence must be positively shown ─────
+
+#[test]
+fn removed_archive_with_a_lossy_name_is_inconclusive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = tar(tmp.path(), "plain.tar", &[(b"s", SHARED)]);
+    let lossy = tmp.path().join(OsStr::from_bytes(b"b-\xff.tar"));
+    fs::rename(&plain, &lossy).unwrap();
+    let db = index(&lossy);
+
+    // Present or removed, a lossy recorded path can never be checked, so
+    // nothing shows the copy is still there.
+    for removed in [false, true] {
+        if removed {
+            fs::remove_file(&lossy).unwrap();
+        }
+        let loaded = build(&registry(&[(1, "b", &db)])).unwrap();
+        let s = src(&loaded, 1);
+        assert_eq!(s.evidence, SourceEvidence::Unreachable, "removed {removed}");
+        let note = s
+            .notes
+            .iter()
+            .find(|n| n.code == LoadCode::SourceUnverified)
+            .expect("the reason is recorded");
+        assert!(!note.detail.is_empty());
+        let report = loaded.floors(&[], &floor(2)).unwrap();
+        let g = &report.groups[0];
+        assert_eq!(g.verdict, Verdict::Inconclusive, "removed {removed}");
+        assert!(!g.only_copy, "removed {removed}");
+        assert_eq!(report.summary.below_floor, 0);
+    }
+}
+
+#[test]
+fn unreadable_archive_is_inconclusive_alone_and_beside_an_online_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (a_db, b, b_db) = online_and_unplugged(tmp.path());
+    // Size and mtime stay as indexed, so a stat alone would match.
+    fs::set_permissions(&b, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&b).is_ok() {
+        // Running as root: permission bits do not stop reads, so this
+        // case cannot be produced here. CI runs as an ordinary user.
+        eprintln!("skipped: running as root, a 000 file is still readable");
+        return;
+    }
+    let alone = build(&registry(&[(1, "b", &b_db)])).unwrap();
+    assert_eq!(src(&alone, 1).evidence, SourceEvidence::Unreachable);
+    let report = alone.floors(&[], &floor(2)).unwrap();
+    assert_eq!(report.groups[0].verdict, Verdict::Inconclusive);
+    assert!(!report.groups[0].only_copy);
+
+    let both = build(&registry(&[(1, "a", &a_db), (2, "b", &b_db)])).unwrap();
+    let report = both.floors(&[], &floor(2)).unwrap();
+    let g = &report.groups[0];
+    assert_eq!(g.verdict, Verdict::Inconclusive);
+    assert!(
+        !g.only_copy,
+        "an unreadable copy made the online one only-copy"
+    );
+    assert_eq!((g.trusted_replicas, g.unknown_sources), (1, 1));
+}
+
+/// Every source currency. `exhaustive` below has no `_` arm, so adding a
+/// variant to `SourceCurrency` stops this test compiling until the new
+/// variant is listed here and its classification asserted.
+const ALL_CURRENCIES: [SourceCurrency; 6] = [
+    SourceCurrency::NotChecked,
+    SourceCurrency::StatMatches,
+    SourceCurrency::Stale,
+    SourceCurrency::Offline,
+    SourceCurrency::Denied,
+    SourceCurrency::DirectoryUnverified,
+];
+
+#[allow(dead_code)]
+fn exhaustive(c: SourceCurrency) {
+    match c {
+        SourceCurrency::NotChecked
+        | SourceCurrency::StatMatches
+        | SourceCurrency::Stale
+        | SourceCurrency::Offline
+        | SourceCurrency::Denied
+        | SourceCurrency::DirectoryUnverified => {}
+    }
+}
+
+#[test]
+fn only_currencies_that_observed_the_source_can_show_presence() {
+    let allowed: Vec<SourceCurrency> = ALL_CURRENCIES
+        .into_iter()
+        .filter(|c| currency_can_show_presence(*c))
+        .collect();
+    // NotChecked never looked at the source (a lossy or unrecorded path).
+    assert_eq!(
+        allowed,
+        vec![
+            SourceCurrency::StatMatches,
+            SourceCurrency::Stale,
+            SourceCurrency::DirectoryUnverified
+        ]
+    );
 }

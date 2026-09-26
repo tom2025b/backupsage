@@ -61,6 +61,9 @@ pub enum LoadCode {
     /// The master's last recorded status lowered the source's trust below
     /// what reading the index showed.
     RegistryStatus,
+    /// Nothing positively showed the source present and readable now, so
+    /// its rows are history only.
+    SourceUnverified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,6 +349,11 @@ pub fn build(registry: &[RegistrySource]) -> Result<LoadedCoverage> {
         sources.push(map_source(entry, registry_status, loaded));
     }
     Ok(LoadedCoverage { sources })
+}
+
+/// Whether a source currency can show that the source is present now.
+pub fn currency_can_show_presence(currency: SourceCurrency) -> bool {
+    !matches!(currency, SourceCurrency::Offline | SourceCurrency::Denied)
 }
 
 /// What a registry status says about trust. `None` means it says nothing
