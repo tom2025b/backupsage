@@ -62,6 +62,75 @@ the replica count a lower bound (`AtLeast`).
    with its label, status and protected designation, even when it holds no
    copies. Out-of-scope content never enters the protected totals.
 
+**Loading (#97).** `coverage_input` builds coverage input from real sources
+and writes nothing beside any of them.
+
+8. The master is read only while idle. Any `-wal`, `-shm` or `-journal` beside
+   it (another command using it, or changes not yet folded into the file)
+   refuses the load, as does a symlink, a second hard link, or a file that is
+   not a signed master. An idle master is opened `mode=ro&immutable=1`, which
+   reads the file alone and creates nothing. The same guards run again after
+   the read, and any change to the file (inode, links, size, mtime, ctime) or
+   any new sidecar fails the load. Only `Master::list` is called on it.
+9. Each source's rows come from its own index, read by the #101 loader
+   (`diff_input::load_index`). The master's replica rows are never used as
+   evidence: only the index can confirm they are current.
+10. Evidence follows what reading the index showed. A complete index is
+    `Complete` (`NoContentHashes` when metadata-only). An incomplete index is
+    `Incomplete`. Rows stay proof of a copy only when the source was
+    positively shown present and readable now. That takes both of these:
+    - a currency that observed the source (`stat_matches`, `stale` or
+      `directory_unverified`; the match is exhaustive, so a new variant
+      cannot default to trusted);
+    - an actual open for reading of the recorded path (a directory is
+      opened and listed). A stat alone is not enough, since an unreadable
+      archive can keep the size and mtime its index recorded. Only the
+      recorded kind is ever opened: the path is stat'ed first, and
+      anything but a regular file (a directory, for a directory source)
+      is refused before any open, since a FIFO with no writer would block
+      the load forever. The open itself is nonblocking and the opened
+      handle is checked again, so a swap between the stat and the open can
+      neither hang the load nor pass as the archive.
+
+    Any other source is `Unreachable`: offline, denied, never checked,
+    recorded under a lossy or relative path or none at all, replaced by
+    another kind of file, or unreadable.
+    Its rows are listed as history, but its presence is unknown for every
+    group. Its copies are never counted as present, and content it alone
+    holds reads as an unknown lower bound (`AtLeast(0)`), never as zero
+    copies. An index the loader refuses (missing, pending journal, WAL
+    mode, multiply linked, busy, changed during the read, unreadable,
+    including a pre-v1.0.1 layout without `path_raw`) or finds incompatible
+    (another schema, hash algorithm or identity) is `Unavailable`, with the
+    loader's reason and no rows. An unknown entry type, or a metadata-only
+    index whose row carries a hash, also makes it `Unavailable`: refused
+    rather than guessed.
+11. Trust starts from the same reading: an unusable index is `db-missing`, an
+    offline or unreadable source is `archive-missing`, a source whose stat
+    differs from the index is `stale-index`, an incomplete index is
+    `incomplete`, and anything else is `ok`. The registry status, which
+    records what `master sync`/`verify` last found (a deep verify sees what a
+    stat cannot), can only lower that trust, never raise it:
+
+    | Registry status | Effect |
+    |---|---|
+    | `ok` | none |
+    | `incomplete` | at most `incomplete` (still counts) |
+    | `stale-index` | `stale-index` (not counted) |
+    | `db-missing` | `db-missing` (not counted), even if the index reads now |
+    | `archive-missing` | `archive-missing` (not counted) |
+    | `stale-replica`, `v2-limited` | none: they describe the replica, which is not used; a v2 index is itself unavailable |
+    | anything else | the load is refused |
+
+12. Ad-hoc `--db` indexes load the same way, with source ids 1, 2, … in
+    argument order and no registry status. The same index given twice (the
+    same canonical path) is refused, and so is any index whose `index_uuid`
+    another input already has: a copied index is the same evidence under
+    another name, never a second replica.
+13. Sources are handled in source-id order whatever order the registry
+    lists them in. The master stores no protected/reference role yet, so
+    the caller passes protected source ids to the floors step.
+
 ## Open decisions
 
 - **Kind and path scope filters.** #96 lists kind and path exclusions. Coverage
@@ -71,9 +140,9 @@ the replica count a lower bound (`AtLeast`).
 
 ## Consequences
 
-`#97` must map every registry state onto a `SourceEvidence` and a
-`SourceStatus`, and load the protected/reference designation; states outside
-rule 2's list need a decision there. Consumers
+Rules 8–13 map every registry state; a new registry status must be added to
+rule 11 before the loader will accept it. A stored protected/reference role
+needs a master change and belongs with #98's command options. Consumers
 must render `inconclusive` distinctly from `below_floor` and must show
 untrusted copies.
 

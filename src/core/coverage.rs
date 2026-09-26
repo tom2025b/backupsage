@@ -28,6 +28,10 @@ pub enum SourceEvidence {
     Unavailable,
     /// Rows exist but carry no content hashes (metadata-only, v2-limited).
     NoContentHashes,
+    /// The rows are real history, but the source cannot be reached now:
+    /// its copies are listed, never counted as present, and its presence
+    /// is unknown for every group.
+    Unreachable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +104,7 @@ pub enum UnknownReason {
     SourceUnavailable,
     SourceIncomplete,
     SourceHasNoContentHashes,
+    SourceUnreachable,
     /// A complete source holds unhashed rows that could be this content.
     UnhashedRowsMayMatch {
         rows: usize,
@@ -427,6 +432,11 @@ fn presence_in(
     building: &Building,
     size: Option<u64>,
 ) -> Presence {
+    // Historical rows of a source that cannot be reached now prove neither
+    // that a copy is still there nor that it is gone.
+    if source.evidence == SourceEvidence::Unreachable {
+        return Presence::Unknown(UnknownReason::SourceUnreachable);
+    }
     if let Some(copies) = building.copies.get(&source.source_id) {
         return Presence::Present {
             copies: copies.len(),
@@ -434,6 +444,7 @@ fn presence_in(
     }
     match source.evidence {
         SourceEvidence::Unavailable => Presence::Unknown(UnknownReason::SourceUnavailable),
+        SourceEvidence::Unreachable => Presence::Unknown(UnknownReason::SourceUnreachable),
         SourceEvidence::Incomplete => Presence::Unknown(UnknownReason::SourceIncomplete),
         SourceEvidence::NoContentHashes => {
             Presence::Unknown(UnknownReason::SourceHasNoContentHashes)
