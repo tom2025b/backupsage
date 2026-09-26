@@ -157,6 +157,14 @@ const BUSY_WAIT: Duration = Duration::from_secs(2);
 
 /// Every guard that must hold before SQLite may open the file (see the
 /// module docs). Returns the stamp to compare after reading.
+///
+/// The header is read with a plain descriptor that is then closed. POSIX
+/// record locks belong to the process, and closing any descriptor on a file
+/// drops all of them, so a *different* SQLite connection in this process
+/// that holds a lock on the same file loses it here (SQLite's own
+/// connections share descriptors and are unaffected). No command keeps such
+/// a connection in use across this point; `master sync`'s outer identity
+/// handle is not read again after `add` re-reads the file.
 pub(crate) fn check_index_file(db_path: &Path) -> std::result::Result<FileStamp, InputNote> {
     let md = match fs::metadata(db_path) {
         Ok(md) if md.is_file() => md,
@@ -275,6 +283,9 @@ pub enum ReadPoint {
     /// Master registration: after `read_identity`'s statements, while the
     /// handle it returns keeps the lock for the rows its caller replicates.
     HeldByCaller,
+    /// Master registration: rows are about to be copied through the handle,
+    /// inside the catalog transaction.
+    DuringReplication,
     /// `diff`: after the metadata statements, before the rows statement.
     BetweenStatements,
     /// `diff`: after the first row, while the rows statement is still stepping.
@@ -336,6 +347,26 @@ pub(crate) fn note(code: NoteCode, detail: impl Into<String>) -> InputNote {
     }
 }
 
+/// Test support in debug builds only: with this variable set, every locked
+/// open rewrites the index in place with its own bytes right after taking
+/// the lock. The content is unchanged but the file stamp is not, so tests
+/// can drive a change-during-read through a real command, which the
+/// in-process hooks cannot reach. Release builds contain no such path.
+#[cfg(debug_assertions)]
+pub const TEST_TOUCH_AFTER_OPEN: &str = "BACKUPSAGE_TEST_TOUCH_INDEX_AFTER_OPEN";
+
+#[cfg(debug_assertions)]
+fn touch_for_tests(db_path: &Path) {
+    if std::env::var_os(TEST_TOUCH_AFTER_OPEN).is_none() {
+        return;
+    }
+    if let Ok(bytes) = fs::read(db_path) {
+        if let Ok(mut file) = fs::OpenOptions::new().write(true).open(db_path) {
+            let _ = std::io::Write::write_all(&mut file, &bytes);
+        }
+    }
+}
+
 /// One index, open read-only inside one read transaction (see the module
 /// docs). Dereferences to the connection for the caller's statements.
 pub struct LockedIndex {
@@ -365,6 +396,8 @@ impl LockedIndex {
             return Err(note(NoteCode::NotABackupsageIndex, "no files_fts table"));
         }
         run_mid_read_hook(ReadPoint::AfterOpen);
+        #[cfg(debug_assertions)]
+        touch_for_tests(db_path);
         Ok(Self {
             conn,
             before,

@@ -579,3 +579,301 @@ fn locked_open_refuses_each_layout_with_its_code() {
         );
     }
 }
+
+// ── #104 review, repair cycle 1 ─────────────────────────────────────────────
+
+/// `dedup --db` and `master add` resolve and register an index through the
+/// locked loader: nothing is written beside a refused layout, and each
+/// refusal is named.
+#[test]
+fn dedup_db_and_master_add_write_nothing_and_name_every_refusal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cases = vec![(Layout::Clean, "")];
+    cases.extend(
+        REFUSED
+            .iter()
+            .filter(|(l, _)| !matches!(l, Layout::Missing)),
+    );
+    for (layout, reason) in cases {
+        let dir = tmp.path().join(format!("{layout:?}"));
+        let (_, db) = layout_index(&dir, layout);
+        let master_path = tmp
+            .path()
+            .join(format!("{layout:?}-master"))
+            .join("master.db");
+        fs::create_dir_all(master_path.parent().unwrap()).unwrap();
+        let state = tree_state(&dir);
+        for argv in [
+            vec![OsStr::new("dedup"), OsStr::new("--db"), db.as_os_str()],
+            vec![
+                OsStr::new("--master"),
+                master_path.as_os_str(),
+                OsStr::new("master"),
+                OsStr::new("add"),
+                db.as_os_str(),
+            ],
+        ] {
+            let out = run(&argv);
+            let what = format!("{layout:?} {argv:?}");
+            if matches!(layout, Layout::Clean) {
+                assert_eq!(out.status.code(), Some(0), "{what}: {}", stderr(&out));
+            } else {
+                assert_eq!(out.status.code(), Some(1), "{what}");
+                assert!(stderr(&out).contains(reason), "{what}: {}", stderr(&out));
+            }
+            assert_same_tree(&state, &tree_state(&dir), &what);
+        }
+    }
+}
+
+/// The master catalogue as a test sees it: every archive's uuid, and every
+/// replicated row's mtime.
+fn catalogue(master_path: &Path) -> (Vec<String>, BTreeSet<i64>) {
+    let conn = rusqlite::Connection::open(master_path).unwrap();
+    let mut stmt = conn.prepare("SELECT index_uuid FROM archives").unwrap();
+    let uuids = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    (
+        uuids,
+        mtimes(&conn, "SELECT DISTINCT mtime_unix FROM files"),
+    )
+}
+
+/// A file renamed over the index path between the identity read and the
+/// row copy must not lend its rows to the other file's identity. The whole
+/// registration is abandoned and nothing is recorded.
+#[test]
+fn registration_is_abandoned_when_another_file_is_renamed_over_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    for same_uuid in [false, true] {
+        let dir = tmp.path().join(format!("same-uuid-{same_uuid}"));
+        let (source, db) = indexed_source(&dir, "a.tar");
+        // B: a rebuild of the same source (new uuid), or a copy of A with
+        // changed rows and A's own uuid.
+        let replacement = dir.join("b.db");
+        if same_uuid {
+            fs::copy(&db, &replacement).unwrap();
+            sql(&replacement, BUMP_ROWS_ONLY);
+        } else {
+            indexer::run_index(&source, Some(&replacement), &IndexOptions::default()).unwrap();
+            sql(&replacement, BUMP_ROWS_ONLY);
+        }
+        let master_path = dir.join("master.db");
+        let (from, to) = (replacement.clone(), db.clone());
+        index_read::set_mid_read_hook(ReadPoint::HeldByCaller, move || {
+            fs::rename(&from, &to).unwrap();
+        });
+        let mut m = master::open_at(&master_path).unwrap();
+        let err = m.add(&db).unwrap_err();
+        drop(m);
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("index_changed_during_read") && err.contains("nothing was recorded"),
+            "same uuid {same_uuid}: {err}"
+        );
+        assert_eq!(
+            catalogue(&master_path),
+            (Vec::new(), BTreeSet::new()),
+            "same uuid {same_uuid}: something was recorded"
+        );
+    }
+}
+
+const BUMP_ROWS_ONLY: &str = "UPDATE files SET mtime_unix = mtime_unix + 1;";
+
+/// The source's read lock is held while its rows are copied, not only while
+/// its identity is read.
+#[test]
+fn source_lock_is_held_while_rows_are_replicated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, db) = indexed_source(tmp.path(), "a.tar");
+    let master_path = tmp.path().join("master.db");
+    let writer = sqlite_writer_at(ReadPoint::DuringReplication, &db);
+    let mut m = master::open_at(&master_path).unwrap();
+    let added = m.add(&db);
+    drop(m);
+    let writer = writer.borrow_mut().take().expect("the hook ran");
+    assert!(
+        writer.is_err(),
+        "a writer committed while rows were replicated"
+    );
+    added.unwrap();
+    let (uuids, rows) = catalogue(&master_path);
+    assert_eq!(uuids.len(), 1);
+    assert_ne!(uuids[0], "rewritten");
+    assert_eq!(rows, BTreeSet::from([1_700_000_001]));
+}
+
+/// Through the real commands (a debug-build seam rewrites each index in
+/// place right after its lock is taken): no command presents a read whose
+/// file changed; each says why.
+#[cfg(debug_assertions)]
+#[test]
+fn commands_never_present_a_read_whose_file_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, db) = indexed_source(&tmp.path().join("idx"), "a.tar");
+    let master_path = tmp.path().join("m").join("master.db");
+    fs::create_dir_all(master_path.parent().unwrap()).unwrap();
+    let touched = |argv: &[&OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_backupsage"))
+            .env("BACKUPSAGE_TEST_TOUCH_INDEX_AFTER_OPEN", "1")
+            .args(argv)
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["search", WORD, "--index"],
+        vec!["search", WORD, "--json", "--index"],
+        vec!["top", "--index"],
+        vec!["inspect", "docs/note.txt", "--index"],
+        vec!["dedup", "--db"],
+    ] {
+        let mut argv: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+        argv.push(db.as_os_str());
+        let out = touched(&argv);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(out.stdout.is_empty(), "{args:?}: presented results");
+        assert!(
+            stderr(&out).contains("index_changed_during_read"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+    let out = touched(&[
+        OsStr::new("--master"),
+        master_path.as_os_str(),
+        OsStr::new("master"),
+        OsStr::new("add"),
+        db.as_os_str(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("index_changed_during_read"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(catalogue(&master_path), (Vec::new(), BTreeSet::new()));
+}
+
+/// Federated search decides nothing from an archive's read, its
+/// metadata-only or incomplete notes included, before that read is proven
+/// coherent.
+#[cfg(debug_assertions)]
+#[test]
+fn federated_notes_come_only_from_coherent_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let master_path = tmp.path().join("m").join("master.db");
+    fs::create_dir_all(master_path.parent().unwrap()).unwrap();
+    let dir = tmp.path().join("meta");
+    fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("meta.tar");
+    fs::write(
+        &source,
+        build_tar(&[("docs/note.txt", WORD.as_bytes().to_vec())]),
+    )
+    .unwrap();
+    let opts = IndexOptions {
+        mode: indexer::ContentMode::MetadataOnly,
+        ..IndexOptions::default()
+    };
+    let db = indexer::run_index(&source, None, &opts).unwrap().db_path;
+    let mut m = master::open_at(&master_path).unwrap();
+    m.add(&db).unwrap();
+    drop(m);
+
+    let search_all = |touch: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_backupsage"));
+        if touch {
+            cmd.env("BACKUPSAGE_TEST_TOUCH_INDEX_AFTER_OPEN", "1");
+        }
+        let out = cmd
+            .args([OsStr::new("--master"), master_path.as_os_str()])
+            .args(["search", WORD, "--all", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        doc["skipped"][0]["reason"].as_str().unwrap().to_owned()
+    };
+    assert!(search_all(false).starts_with("metadata-only"));
+    let reason = search_all(true);
+    assert!(
+        reason.starts_with("refused: index_changed_during_read"),
+        "{reason}"
+    );
+}
+
+/// Discovery by the working directory never writes beside a candidate, and
+/// a lone refused candidate is named with its reason, not "no index found".
+#[test]
+fn discovery_names_refused_candidates_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let (_, db) = indexed_source(&tmp.path().join("build"), "a.tar");
+    fs::copy(&db, cwd.join("archive.db")).unwrap();
+    fs::write(cwd.join("notes.db"), b"not sqlite at all").unwrap();
+    let discover = || {
+        Command::new(env!("CARGO_BIN_EXE_backupsage"))
+            .current_dir(&cwd)
+            .args(["search", WORD])
+            .output()
+            .unwrap()
+    };
+    let out = discover();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "clean discovery: {}",
+        stderr(&out)
+    );
+
+    make_wal_header(&cwd.join("archive.db"));
+    let state = tree_state(&cwd);
+    let out = discover();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("archive.db") && err.contains("wal_mode_index"),
+        "{err}"
+    );
+    assert!(!err.contains("notes.db"), "a non-index was listed: {err}");
+    assert_same_tree(&state, &tree_state(&cwd), "discovery");
+}
+
+/// A writer holding the index exclusively makes the read fail closed as
+/// busy, through a command and in the library, without writing anything.
+///
+/// POSIX record locks belong to a process, and closing any descriptor on a
+/// file drops them all, so while the writer holds its lock this test process
+/// must not open and close the index itself (no stamping, no library open)
+/// before the command has run.
+#[test]
+fn busy_index_is_refused_with_its_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, db) = indexed_source(tmp.path(), "a.tar");
+    let state = tree_state(tmp.path());
+
+    let writer = rusqlite::Connection::open(&db).unwrap();
+    writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+    let out = run(&[
+        OsStr::new("search"),
+        OsStr::new(WORD),
+        OsStr::new("--index"),
+        db.as_os_str(),
+    ]);
+    // In-process, SQLite's own lock table answers before any descriptor is
+    // closed, so the library refusal is checked while the lock is still held.
+    let in_process = LockedIndex::open(&db).map(|_| ()).unwrap_err().code;
+    writer.execute_batch("ROLLBACK;").unwrap();
+    drop(writer);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("index_busy"), "{}", stderr(&out));
+    assert!(out.stdout.is_empty());
+    assert_eq!(in_process, NoteCode::IndexBusy);
+    assert_same_tree(&state, &tree_state(tmp.path()), "busy");
+}

@@ -288,16 +288,32 @@ pub fn search_all(
                 continue;
             }
         };
-        if index_completed(&conn) == Some(false) {
+        let incomplete = index_completed(&conn) == Some(false);
+        let mode = crate::store::content_mode(&conn);
+        // Metadata-only archives have no content to match (#39).
+        let outcome = if mode == crate::indexer::ContentMode::MetadataOnly {
+            None
+        } else {
+            Some(
+                search(&conn, query, limit_per_archive, snippets)
+                    .with_context(|| format!("search failed in '{}'", row.label))?,
+            )
+        };
+        // Nothing read above counts, notes included, unless the read was
+        // coherent: an archive changed mid-read is refused, not described.
+        if let Err(note) = conn.finish() {
+            out.skipped
+                .push((row.label.clone(), format!("refused: {note}")));
+            continue;
+        }
+        if incomplete {
             out.skipped.push((
                 row.label.clone(),
                 "incomplete index — results may be partial".into(),
             ));
         }
-        // Metadata-only archives have no content to match — skip with a
-        // worded reason (exit-2 semantics) instead of erroring out (#39).
-        let mode = crate::store::content_mode(&conn);
-        if mode == crate::indexer::ContentMode::MetadataOnly {
+        let Some(outcome) = outcome else {
+            // Skipped with a worded reason (exit-2 semantics), not an error.
             out.skipped.push((
                 row.label.clone(),
                 "metadata-only — content search unsupported; re-index with \
@@ -305,14 +321,7 @@ pub fn search_all(
                     .into(),
             ));
             continue;
-        }
-        let outcome = search(&conn, query, limit_per_archive, snippets)
-            .with_context(|| format!("search failed in '{}'", row.label))?;
-        if let Err(note) = conn.finish() {
-            out.skipped
-                .push((row.label.clone(), format!("refused: {note}")));
-            continue;
-        }
+        };
         if !outcome.hits.is_empty() {
             out.per_archive.push(FederatedHit {
                 archive_label: row.label.clone(),
@@ -369,6 +378,7 @@ pub fn discover_db_path_with_control(
         return Ok(legacy);
     }
 
+    let mut refused: Vec<String> = Vec::new();
     // Last resort: any *.db in the current directory that actually is a
     // BackupSage index (v0.1 grabbed the first *.db file of any kind and
     // failed later with "file is not a database").
@@ -382,13 +392,24 @@ pub fn discover_db_path_with_control(
         for p in candidates {
             control.check_cancelled()?;
             // The locked loader checks it is a BackupSage index without
-            // writing beside it; a refused candidate is not adopted.
-            if LockedIndex::open(&p).is_ok() {
-                control.emit(crate::progress::ProgressEvent::IndexDiscovered { path: &p });
-                return Ok(p);
+            // writing beside it. A refused candidate is not adopted, but its
+            // reason is kept for the error below.
+            match LockedIndex::open(&p) {
+                Ok(_) => {
+                    control.emit(crate::progress::ProgressEvent::IndexDiscovered { path: &p });
+                    return Ok(p);
+                }
+                Err(note) if note.code == NoteCode::NotABackupsageIndex => {}
+                Err(note) => refused.push(format!("'{}' ({note})", p.display())),
             }
         }
     }
 
+    if !refused.is_empty() {
+        bail!(
+            "no readable index found — refused: {}; pass --index <path> to name one",
+            refused.join("; ")
+        );
+    }
     bail!("no index found — run `backupsage index <archive>` first, or pass --index <path>")
 }
