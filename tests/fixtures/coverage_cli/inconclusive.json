@@ -1,0 +1,548 @@
+{
+  "version": 1,
+  "coverage_state": "inconclusive",
+  "params": {
+    "input": "master",
+    "min_copies": 2,
+    "min_size": 0,
+    "include_empty": false,
+    "exts": [],
+    "path_glob": null,
+    "archives": null,
+    "protected": []
+  },
+  "sources": [
+    {
+      "source_id": 1,
+      "label": "a.tar",
+      "db_path": "<TMP>/a.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f612e7461722e6462",
+      "source": "<TMP>/a.tar",
+      "source_type": "tar",
+      "registry_status": "ok",
+      "evidence": "complete",
+      "status": "ok",
+      "counts_toward_floor": true,
+      "protected": false,
+      "rows": 8,
+      "index_notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "source_id": 2,
+      "label": "b.tar",
+      "db_path": "<TMP>/b.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f622e7461722e6462",
+      "source": "<TMP>/b.tar",
+      "source_type": "tar",
+      "registry_status": "ok",
+      "evidence": "unreachable",
+      "status": "archive-missing",
+      "counts_toward_floor": false,
+      "protected": false,
+      "rows": 2,
+      "index_notes": [
+        {
+          "code": "source_offline",
+          "detail": "the source is not reachable"
+        }
+      ],
+      "notes": [
+        {
+          "code": "source_unverified",
+          "detail": "the source's presence was not established (Offline)"
+        }
+      ]
+    },
+    {
+      "source_id": 3,
+      "label": "c-dir",
+      "db_path": "<TMP>/c-dir.db",
+      "db_path_bytes": "<TMP-HEX>2f632d6469722e6462",
+      "source": "<TMP>/c-dir",
+      "source_type": "dir",
+      "registry_status": "ok",
+      "evidence": "complete",
+      "status": "ok",
+      "counts_toward_floor": true,
+      "protected": false,
+      "rows": 2,
+      "index_notes": [
+        {
+          "code": "source_directory_unverified",
+          "detail": "a directory's own stat does not reflect changes to the files inside it"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "source_id": 4,
+      "label": "d.tar",
+      "db_path": "<TMP>/d.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f642e7461722e6462",
+      "source": null,
+      "source_type": null,
+      "registry_status": "ok",
+      "evidence": "unavailable",
+      "status": "db-missing",
+      "counts_toward_floor": false,
+      "protected": false,
+      "rows": 0,
+      "index_notes": [
+        {
+          "code": "index_missing",
+          "detail": "no index file at this path"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "source_id": 5,
+      "label": "e.tar",
+      "db_path": "<TMP>/e.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f652e7461722e6462",
+      "source": "<TMP>/e.tar",
+      "source_type": "tar",
+      "registry_status": "ok",
+      "evidence": "complete",
+      "status": "ok",
+      "counts_toward_floor": true,
+      "protected": false,
+      "rows": 1,
+      "index_notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "groups": [
+    {
+      "content_hash": "b3:51eeb1cbc4bc160313ef1e9b4e3415d9946fddb5dac4a9f5170a0ba4519db0c5",
+      "size": 9,
+      "verdict": "inconclusive",
+      "only_copy": false,
+      "replicas": {
+        "observed": 1,
+        "exact": false
+      },
+      "trusted_replicas": 1,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 1,
+          "label": "a.tar",
+          "path": "a-only.txt",
+          "path_bytes": "612d6f6e6c792e747874",
+          "file_id": 2,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "content_hash": "b3:6c041a4c22becf32be0b91f3f5ae51ffa9aebd4071e3cd2218f46e2df18facf0",
+      "size": 31,
+      "verdict": "meets_floor",
+      "only_copy": false,
+      "replicas": {
+        "observed": 2,
+        "exact": false
+      },
+      "trusted_replicas": 2,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 1,
+          "label": "a.tar",
+          "path": "shared.txt",
+          "path_bytes": "7368617265642e747874",
+          "file_id": 1,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        },
+        {
+          "source_id": 2,
+          "label": "b.tar",
+          "path": "copy/shared.txt",
+          "path_bytes": "636f70792f7368617265642e747874",
+          "file_id": 1,
+          "status": "archive-missing",
+          "counts_toward_floor": false,
+          "protected": false
+        },
+        {
+          "source_id": 3,
+          "label": "c-dir",
+          "path": "deep/shared.txt",
+          "path_bytes": "646565702f7368617265642e747874",
+          "file_id": 1,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": [
+        {
+          "source_id": 1,
+          "path": "alias-of-shared",
+          "path_bytes": "616c6961732d6f662d736861726564",
+          "file_id": 5
+        }
+      ]
+    },
+    {
+      "content_hash": "b3:9abc4b4f6d0375f2ac38be97a3902b2e55412df1174f4da1ac990a73992feaee",
+      "size": 31,
+      "verdict": "meets_floor",
+      "only_copy": false,
+      "replicas": {
+        "observed": 2,
+        "exact": false
+      },
+      "trusted_replicas": 2,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 1,
+          "label": "a.tar",
+          "path": "raw-�",
+          "path_bytes": "7261772dff",
+          "file_id": 7,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        },
+        {
+          "source_id": 3,
+          "label": "c-dir",
+          "path": "raw-�",
+          "path_bytes": "7261772dff",
+          "file_id": 2,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "content_hash": "b3:a6cc38792450f37fd25365c1d11869ed3eb729c7ecf477c4ff1d8946450f26ce",
+      "size": 17,
+      "verdict": "inconclusive",
+      "only_copy": false,
+      "replicas": {
+        "observed": 1,
+        "exact": false
+      },
+      "trusted_replicas": 1,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 1,
+          "label": "a.tar",
+          "path": "dup.txt",
+          "path_bytes": "6475702e747874",
+          "file_id": 4,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "content_hash": "b3:c755b439b737d05fbf712f4c172ec074d4cc740f13b28e5eca7e7d4ae74b28f4",
+      "size": 19,
+      "verdict": "inconclusive",
+      "only_copy": false,
+      "replicas": {
+        "observed": 0,
+        "exact": false
+      },
+      "trusted_replicas": 0,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 2,
+          "label": "b.tar",
+          "path": "b-�.bin",
+          "path_bytes": "622dfe2e62696e",
+          "file_id": 2,
+          "status": "archive-missing",
+          "counts_toward_floor": false,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    }
+  ],
+  "excluded_groups": [
+    {
+      "content_hash": "b3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+      "size": 0,
+      "reason": "empty_content",
+      "copies": [
+        {
+          "source_id": 1,
+          "label": "a.tar",
+          "path": "empty.txt",
+          "path_bytes": "656d7074792e747874",
+          "file_id": 8,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    }
+  ],
+  "unknown_content": [
+    {
+      "source_id": 5,
+      "path": "xattred.txt",
+      "path_bytes": "786174747265642e747874",
+      "file_id": 1,
+      "size": 9,
+      "reason": "pax_unparsed"
+    }
+  ],
+  "excluded_rows": [
+    {
+      "source_id": 1,
+      "path": "dup.txt",
+      "path_bytes": "6475702e747874",
+      "file_id": 3,
+      "reason": "shadowed"
+    },
+    {
+      "source_id": 1,
+      "path": "sym",
+      "path_bytes": "73796d",
+      "file_id": 6,
+      "reason": "symlink"
+    }
+  ],
+  "summary": {
+    "min_copies": 2,
+    "sources": 5,
+    "sources_degraded": 2,
+    "groups": 5,
+    "meets_floor": 2,
+    "below_floor": 0,
+    "inconclusive": 3,
+    "only_copy": 0,
+    "protected_replicas": 0,
+    "excluded_groups": 1,
+    "unknown_content_rows": 1,
+    "shadowed_rows": 1,
+    "symlink_rows": 1,
+    "unmatched_hardlink_rows": 0,
+    "hardlink_aliases": 1
+  }
+}
