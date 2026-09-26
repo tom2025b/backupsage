@@ -485,10 +485,18 @@ fn totals_are_derived_from_the_emitted_rows() {
     assert_eq!(s.inconclusive, count(Verdict::Inconclusive));
     assert_eq!(s.only_copy, r.groups.iter().filter(|g| g.only_copy).count());
     assert_eq!(s.excluded_groups, r.excluded_groups.len());
-    // Source 1 is unavailable, so no in-scope group can be conclusive here.
+    // Source 1 is unavailable. Content 2 still meets the floor: its trusted
+    // replicas (ok source 3, incomplete source 4) reach 2 on their own. The
+    // other two stay inconclusive; empty content is out of scope.
     assert_eq!(
-        (s.groups, s.inconclusive, s.excluded_groups),
-        (3, 3, 1),
+        (
+            s.groups,
+            s.meets_floor,
+            s.inconclusive,
+            s.below_floor,
+            s.excluded_groups
+        ),
+        (3, 1, 2, 0, 1),
         "{r:?}"
     );
 }

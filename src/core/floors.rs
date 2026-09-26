@@ -9,9 +9,11 @@
 //! `Unknown` presence makes it `Inconclusive`; only a fully known count can
 //! be `BelowFloor`.
 
+use std::collections::BTreeMap;
+
 use anyhow::{bail, Result};
 
-use crate::coverage::{Coverage, Exclusion, RowRef};
+use crate::coverage::{Coverage, Exclusion, ExclusionReason, Presence, RowRef};
 
 /// Replicas wanted per content when the caller does not choose.
 pub const DEFAULT_MIN_COPIES: usize = 2;
@@ -28,10 +30,12 @@ pub enum SourceStatus {
 
 impl SourceStatus {
     /// Whether a copy observed in a source with this status is trusted to
-    /// count toward the floor.
+    /// count toward the floor. `Ok` and `Incomplete` sources hashed the copy
+    /// from bytes nothing has since flagged; a stale index, a missing index
+    /// or a missing source leaves the copy unverified. Untrusted copies are
+    /// still listed.
     pub fn counts_toward_floor(self) -> bool {
-        let _ = self;
-        false
+        matches!(self, SourceStatus::Ok | SourceStatus::Incomplete)
     }
 }
 
@@ -138,6 +142,121 @@ pub fn evaluate(
     statuses: &[(i64, SourceStatus)],
     params: &FloorParams,
 ) -> Result<FloorReport> {
-    let _ = (coverage, statuses, params);
-    bail!("floor evaluation is not implemented yet")
+    if params.min_copies == 0 {
+        bail!("the minimum-copy floor must be at least 1");
+    }
+    let mut status_of: BTreeMap<i64, SourceStatus> = BTreeMap::new();
+    for &(id, status) in statuses {
+        if status_of.insert(id, status).is_some() {
+            bail!("source {id} has more than one status");
+        }
+    }
+    let labels: BTreeMap<i64, &str> = coverage
+        .sources
+        .iter()
+        .map(|s| (s.source_id, s.label.as_str()))
+        .collect();
+    if let Some(id) = labels.keys().find(|id| !status_of.contains_key(id)) {
+        bail!("source {id} has no status");
+    }
+    if let Some(id) = status_of.keys().find(|id| !labels.contains_key(id)) {
+        bail!("status given for unknown source {id}");
+    }
+
+    let mut groups = Vec::new();
+    let mut excluded_groups = Vec::new();
+    let mut hardlink_aliases = 0;
+    for group in &coverage.groups {
+        hardlink_aliases += group.aliases.len();
+        let out_of_scope = match group.size {
+            Some(0) if !params.include_empty => Some(GroupExclusionReason::EmptyContent),
+            Some(n) if n < params.min_size => Some(GroupExclusionReason::BelowMinSize),
+            // An unknown length is never excluded by size.
+            _ => None,
+        };
+        if let Some(reason) = out_of_scope {
+            excluded_groups.push(GroupExclusion {
+                content_hash: group.content_hash,
+                size: group.size,
+                reason,
+                copies: group.copies.clone(),
+            });
+            continue;
+        }
+
+        let (mut trusted, mut untrusted, mut unknown) = (0, 0, 0);
+        for p in &group.presence {
+            match p.presence {
+                Presence::Present { .. } if status_of[&p.source_id].counts_toward_floor() => {
+                    trusted += 1
+                }
+                Presence::Present { .. } => untrusted += 1,
+                Presence::Unknown(_) => unknown += 1,
+                Presence::Absent => {}
+            }
+        }
+        // Trusted replicas alone decide a met floor; below it, any unknown
+        // presence could hide a trusted copy, so only a fully known count
+        // is judged below the floor.
+        let verdict = if trusted >= params.min_copies {
+            Verdict::MeetsFloor
+        } else if unknown > 0 {
+            Verdict::Inconclusive
+        } else {
+            Verdict::BelowFloor
+        };
+        // The engine emits copies sorted; mapping them in place keeps that.
+        let copies: Vec<FloorCopy> = group
+            .copies
+            .iter()
+            .map(|row| {
+                let status = status_of[&row.source_id];
+                FloorCopy {
+                    row: row.clone(),
+                    source_label: labels[&row.source_id].to_owned(),
+                    status,
+                    counts_toward_floor: status.counts_toward_floor(),
+                }
+            })
+            .collect();
+        groups.push(GroupFloor {
+            content_hash: group.content_hash,
+            size: group.size,
+            verdict,
+            only_copy: trusted == 1 && unknown == 0,
+            trusted_replicas: trusted,
+            untrusted_replicas: untrusted,
+            unknown_sources: unknown,
+            copies,
+        });
+    }
+
+    let count_rows = |reason| {
+        coverage
+            .exclusions
+            .iter()
+            .filter(|e| e.reason == reason)
+            .count()
+    };
+    let count = |verdict| groups.iter().filter(|g| g.verdict == verdict).count();
+    let summary = FloorSummary {
+        min_copies: params.min_copies,
+        groups: groups.len(),
+        meets_floor: count(Verdict::MeetsFloor),
+        below_floor: count(Verdict::BelowFloor),
+        inconclusive: count(Verdict::Inconclusive),
+        only_copy: groups.iter().filter(|g| g.only_copy).count(),
+        excluded_groups: excluded_groups.len(),
+        shadowed_rows: count_rows(ExclusionReason::Shadowed),
+        symlink_rows: count_rows(ExclusionReason::Symlink),
+        unmatched_hardlink_rows: count_rows(ExclusionReason::UnmatchedHardlink),
+        hardlink_aliases,
+        unknown_content_rows: coverage.unknown_content.len(),
+    };
+    Ok(FloorReport {
+        groups,
+        excluded_groups,
+        excluded_rows: coverage.exclusions.clone(),
+        summary,
+    })
 }
