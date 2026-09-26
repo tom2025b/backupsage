@@ -671,6 +671,28 @@ fn a_degraded_source_exits_2_even_when_every_group_meets_the_floor() {
 }
 
 #[test]
+fn unknown_content_alone_makes_the_result_inconclusive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = Tar::default()
+        .file(b"known.txt", SHARED)
+        .pax(b"this is not a pax record at all")
+        .file(b"unknown.txt", b"bytes whose hash proves nothing")
+        .write(tmp.path(), "e.tar");
+    let e_db = index(&e);
+    let out = coverage_dbs(&[&e_db], &["--min-copies", "1", "--json"]);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    let doc = json(&out);
+    // Every source is complete and ok and every group meets its floor,
+    // but a row's content is unknown: it may have no other copy anywhere.
+    assert_eq!(doc["summary"]["sources_degraded"], 0);
+    assert_eq!(doc["summary"]["meets_floor"], 1);
+    assert_eq!(doc["summary"]["inconclusive"], 0);
+    assert_eq!(doc["unknown_content"][0]["path"], "unknown.txt");
+    assert_eq!(doc["coverage_state"], "inconclusive");
+    assert_totals(&doc, "unknown content");
+}
+
+#[test]
 fn errors_exit_1_and_name_the_problem() {
     let tmp = tempfile::tempdir().unwrap();
     let c = corpus(tmp.path());
