@@ -33,15 +33,17 @@ the replica count a lower bound (`AtLeast`).
    listed with their label and status but not counted.
 3. A group meets the floor when its trusted replicas reach it, even under a
    lower-bound count. Below the floor, any `unknown` presence makes the group
-   `inconclusive`, because it could hide a trusted copy. Only a fully known
-   count is `below_floor`. Unknown never reads as below the floor or as met.
+   `inconclusive`, whatever that source's status: an unknown is never quietly
+   discounted into a below-floor alarm. Only a fully known count is
+   `below_floor`. Unknown never reads as below the floor or as met.
 4. `only_copy` marks exactly one trusted replica with no unknown presence. It
    is independent of the verdict, so it also appears when a floor of 1 is met.
 5. Content of a known length that is empty, or smaller than `min_size`, is out
    of scope. It is listed with its copies and a reason, never silently dropped.
-   An unknown length is never excluded by size. Engine row exclusions
-   (shadowed, symlink, unmatched hardlink), hardlink aliases and unknown rows
-   are counted in the summary.
+   An unknown length is never excluded by size. Hardlink aliases are listed
+   with their group, in scope or not. Unknown-content rows keep their path,
+   size and reason, and engine row exclusions (shadowed, symlink, unmatched
+   hardlink) keep theirs. The summary counts all of them from those lists.
 6. Group order follows the engine (content hash); copy order follows the
    engine (source id, raw path, file id). Totals derive from the emitted rows.
 

@@ -170,9 +170,7 @@ pub fn evaluate(
 
     let mut groups = Vec::new();
     let mut excluded_groups = Vec::new();
-    let mut hardlink_aliases = 0;
     for group in &coverage.groups {
-        hardlink_aliases += group.aliases.len();
         let out_of_scope = match group.size {
             Some(0) if !params.include_empty => Some(GroupExclusionReason::EmptyContent),
             Some(n) if n < params.min_size => Some(GroupExclusionReason::BelowMinSize),
@@ -185,7 +183,7 @@ pub fn evaluate(
                 size: group.size,
                 reason,
                 copies: group.copies.clone(),
-                aliases: Vec::new(),
+                aliases: group.aliases.clone(),
             });
             continue;
         }
@@ -234,7 +232,7 @@ pub fn evaluate(
             untrusted_replicas: untrusted,
             unknown_sources: unknown,
             copies,
-            aliases: Vec::new(),
+            aliases: group.aliases.clone(),
         });
     }
 
@@ -246,6 +244,7 @@ pub fn evaluate(
             .count()
     };
     let count = |verdict| groups.iter().filter(|g| g.verdict == verdict).count();
+    let unknown_content = coverage.unknown_content.clone();
     let summary = FloorSummary {
         min_copies: params.min_copies,
         groups: groups.len(),
@@ -257,14 +256,18 @@ pub fn evaluate(
         shadowed_rows: count_rows(ExclusionReason::Shadowed),
         symlink_rows: count_rows(ExclusionReason::Symlink),
         unmatched_hardlink_rows: count_rows(ExclusionReason::UnmatchedHardlink),
-        hardlink_aliases,
-        unknown_content_rows: coverage.unknown_content.len(),
+        hardlink_aliases: groups.iter().map(|g| g.aliases.len()).sum::<usize>()
+            + excluded_groups
+                .iter()
+                .map(|g| g.aliases.len())
+                .sum::<usize>(),
+        unknown_content_rows: unknown_content.len(),
     };
     Ok(FloorReport {
         groups,
         excluded_groups,
         excluded_rows: coverage.exclusions.clone(),
-        unknown_content: Vec::new(),
+        unknown_content,
         summary,
     })
 }
