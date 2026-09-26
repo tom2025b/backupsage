@@ -77,11 +77,21 @@ and writes nothing beside any of them.
    evidence: only the index can confirm they are current.
 10. Evidence follows what reading the index showed. A complete index is
     `Complete` (`NoContentHashes` when metadata-only). An incomplete index is
-    `Incomplete`. An index whose source is offline or unreadable now is
-    `Unreachable`: its rows are listed as history, but its presence is
-    unknown for every group, so its copies are never counted as present and
-    content it alone holds reads as an unknown lower bound (`AtLeast(0)`),
-    never as zero copies. An index the loader refuses (missing, pending journal, WAL
+    `Incomplete`. Rows stay proof of a copy only when the source was
+    positively shown present and readable now. That takes both of these:
+    - a currency that observed the source (`stat_matches`, `stale` or
+      `directory_unverified`; the match is exhaustive, so a new variant
+      cannot default to trusted);
+    - an actual open for reading of the recorded path (a directory is
+      opened and listed). A stat alone is not enough, since an unreadable
+      archive can keep the size and mtime its index recorded.
+
+    Any other source is `Unreachable`: offline, denied, never checked,
+    recorded under a lossy or relative path or none at all, or unreadable.
+    Its rows are listed as history, but its presence is unknown for every
+    group. Its copies are never counted as present, and content it alone
+    holds reads as an unknown lower bound (`AtLeast(0)`), never as zero
+    copies. An index the loader refuses (missing, pending journal, WAL
     mode, multiply linked, busy, changed during the read, unreadable,
     including a pre-v1.0.1 layout without `path_raw`) or finds incompatible
     (another schema, hash algorithm or identity) is `Unavailable`, with the

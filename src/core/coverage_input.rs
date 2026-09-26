@@ -351,9 +351,43 @@ pub fn build(registry: &[RegistrySource]) -> Result<LoadedCoverage> {
     Ok(LoadedCoverage { sources })
 }
 
-/// Whether a source currency can show that the source is present now.
+/// Whether a source currency can show that the source is present now: only
+/// a currency that actually observed the source can. This is an allow-list,
+/// and the match is exhaustive with no `_` arm on purpose: a new
+/// `SourceCurrency` variant stops this compiling until someone decides, so
+/// it can never default to a trusted, present source.
 pub fn currency_can_show_presence(currency: SourceCurrency) -> bool {
-    !matches!(currency, SourceCurrency::Offline | SourceCurrency::Denied)
+    match currency {
+        SourceCurrency::StatMatches
+        | SourceCurrency::Stale
+        | SourceCurrency::DirectoryUnverified => true,
+        SourceCurrency::NotChecked | SourceCurrency::Offline | SourceCurrency::Denied => false,
+    }
+}
+
+/// Positive proof that the recorded source can be read now: the file is
+/// opened for reading, or the directory opened and listed. Nothing is read
+/// from it and nothing is written. A stat alone is not enough: an unreadable
+/// archive can keep the size and mtime its index recorded.
+fn source_readable(source: Option<&str>, source_type: Option<&str>) -> Result<(), String> {
+    let source = source.ok_or("the index records no source path")?;
+    if source.contains('\u{fffd}') {
+        return Err(
+            "the recorded source path is a lossy rendering; its exact bytes are \
+                    unknown, so it cannot be opened"
+                .into(),
+        );
+    }
+    let path = Path::new(source);
+    if !path.is_absolute() {
+        return Err("the recorded source path is relative, so it cannot be opened".into());
+    }
+    let opened = if source_type == Some("dir") {
+        fs::read_dir(path).map(|_| ())
+    } else {
+        fs::File::open(path).map(|_| ())
+    };
+    opened.map_err(|e| format!("the source cannot be opened for reading: {e}"))
 }
 
 /// What a registry status says about trust. `None` means it says nothing
@@ -442,27 +476,48 @@ fn map_source(
     if evidence == SourceEvidence::Unavailable {
         rows.clear();
     }
-    // An unplugged or unreadable source: its rows are history, listed but
-    // never proof of a copy there now (ADR 0011).
-    if evidence != SourceEvidence::Unavailable
-        && matches!(
-            snapshot.info.source_currency,
-            SourceCurrency::Offline | SourceCurrency::Denied
-        )
-    {
-        evidence = SourceEvidence::Unreachable;
+    // Rows stay proof of a copy only when the source was positively shown
+    // present and readable now. Anything else (unplugged, denied, never
+    // checked, lossy or unrecorded path, unreadable) leaves them history,
+    // listed but never counted (ADR 0011).
+    let currency = snapshot.info.source_currency;
+    if evidence != SourceEvidence::Unavailable {
+        let shown = if currency_can_show_presence(currency) {
+            source_readable(health.source.as_deref(), health.source_type.as_deref())
+        } else {
+            Err(format!(
+                "the source's presence was not established ({currency:?})"
+            ))
+        };
+        if let Err(why) = shown {
+            notes.push(LoadNote {
+                code: LoadCode::SourceUnverified,
+                detail: why,
+            });
+            evidence = SourceEvidence::Unreachable;
+        }
     }
 
     // Trust from what reading showed now: an unusable index, then the live
     // source, then how far indexing got.
     let live = if evidence == SourceEvidence::Unavailable {
         SourceStatus::DbMissing
+    } else if evidence == SourceEvidence::Unreachable {
+        SourceStatus::ArchiveMissing
     } else {
-        match snapshot.info.source_currency {
-            SourceCurrency::Offline | SourceCurrency::Denied => SourceStatus::ArchiveMissing,
+        // Exhaustive on purpose: see `currency_can_show_presence`.
+        match currency {
             SourceCurrency::Stale => SourceStatus::StaleIndex,
-            _ if evidence == SourceEvidence::Incomplete => SourceStatus::Incomplete,
-            _ => SourceStatus::Ok,
+            SourceCurrency::StatMatches | SourceCurrency::DirectoryUnverified => {
+                if evidence == SourceEvidence::Incomplete {
+                    SourceStatus::Incomplete
+                } else {
+                    SourceStatus::Ok
+                }
+            }
+            SourceCurrency::NotChecked | SourceCurrency::Offline | SourceCurrency::Denied => {
+                SourceStatus::ArchiveMissing
+            }
         }
     };
     // The registry records what `master sync`/`verify` last found (a deep
