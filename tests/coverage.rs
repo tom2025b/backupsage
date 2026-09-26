@@ -796,3 +796,17 @@ fn zero_size_rows_match_empty_content_and_rule_out_everything_else() {
     assert_eq!(presence(&cov, 1, 3), Presence::Absent);
     assert_eq!(find(&cov, 1).replicas, ReplicaCount::Exact(1));
 }
+
+#[test]
+fn five_byte_unhashed_row_leaves_empty_content_absent() {
+    // A trusted size of 5 cannot be the zero-length content.
+    let cov = run(&[
+        complete(1, vec![file(1, "empty", 0, 0)]),
+        complete(2, vec![unhashed(1, "five", 5, 0)]),
+    ]);
+    assert_eq!(find(&cov, 0).size, Some(0));
+    assert_eq!(presence(&cov, 0, 2), Presence::Absent);
+    assert_eq!(find(&cov, 0).replicas, ReplicaCount::Exact(1));
+    assert_eq!(cov.unknown_content.len(), 1);
+    assert_eq!(cov.unknown_content[0].row, rref(2, "five", 1));
+}
