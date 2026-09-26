@@ -13,6 +13,8 @@ you can ask, across every backup you own at once:
 - *Which photos are near-duplicates (edited, re-saved, resized copies)?*
 - *Which copy is newest — by EXIF capture date, tar mtime, or archive date?*
 - *Which backup contains the config file mentioning "postgres password"?*
+- *Which content has fewer than two trustworthy copies — and which can't be
+  told, because a backup is unplugged or unreadable?*
 
 v1.0 is **strictly read-only over your data**: the only files it ever writes
 are its own `.db` indexes and the master catalog. It reports and recommends;
@@ -147,6 +149,43 @@ exit codes are frozen by golden fixtures — see `docs/CONTRACT.md`. The
 [compatibility policy](docs/COMPATIBILITY.md) defines their v1.x support
 window and the process for any future breaking change.
 
+### `coverage` — which content has too few trusted copies
+
+```bash
+backupsage coverage                          # floor of 2 trusted copies
+backupsage coverage --min-copies 3 --ext jpg,heic --protected cold-storage
+backupsage coverage --db a.tar.zst.db --db b.tar.zst.db --json -o coverage.json
+```
+
+Read-only: the master is read only while idle and opened so that nothing is
+written beside it, and every source's rows come from its own index. Content
+groups are identical BLAKE3 content, any filename. A copy counts toward the
+floor only when its source is `ok` or `incomplete` and was shown present and
+readable now; copies in stale, missing or unreadable sources are listed but
+never counted. **Unknown never reads as a missing copy**: content whose count
+cannot be settled (an unplugged backup, an unreadable index, a row whose
+hash proves nothing) is `inconclusive`, never `below the floor`, and
+`only copy` is claimed only when nothing is unknown. Hardlinks are aliases,
+never extra copies; symlinks and shadowed paths are listed and not judged.
+
+| Flag | Description |
+|------|-------------|
+| `--min-copies N` | Trusted copies wanted per content (default 2, at least 1) |
+| `--min-size`, `--include-empty` | Put small or empty content out of scope (listed, not judged) |
+| `--ext`, `--path-glob` | Report only content with a matching path, as `dedup` matches; every copy still counts |
+| `--archive ID_OR_LABEL` (repeatable) | Ask about these sources only |
+| `--protected ID_OR_LABEL` (repeatable) | Mark protected/reference sources: they count like any trusted copy and are shown separately |
+| `--db <FILE>` (repeatable) | Ad-hoc mode without the master |
+| `--json`, `-o FILE` | Versioned JSON report; `-o` never overwrites and never writes into an input |
+
+`dedup`'s `--kind` is not offered: a file's kind is decided from its bytes
+at indexing time, and coverage does not read it yet. Exit codes: `0` every
+source is a complete, `ok` source and nothing is inconclusive · `1` error ·
+`2` completed, but a source is degraded (unreachable, unavailable, stale,
+incomplete or without hashes) or some content or row is unknown. Content
+below the floor is a finding, not an error: it exits `0` when everything
+else is known. See `docs/CONTRACT.md` and ADR 0011.
+
 ### `search` — full-text search, one archive or all
 
 ```bash
@@ -238,6 +277,9 @@ search --all ◄─ fan-out to per-archive FTS5, grouped results
 - **`src/master.rs`** — catalog, replication, staleness
 - **`src/dedup.rs`** — exact + near grouping, keep policy
 - **`src/report.rs`** — the JSON contract
+- **`src/coverage.rs` / `src/floors.rs` / `src/coverage_input.rs` /
+  `src/coverage_report.rs`** — coverage grouping, minimum-copy floors,
+  read-only loading and the versioned report
 - **`src/searcher.rs`** — FTS5 queries, discovery, federation
 - **`src/cli.rs` / `src/main.rs`** — clap definitions and rendering
 - **`tests/`** — 75 tests over real generated archives

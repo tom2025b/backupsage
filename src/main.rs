@@ -1,8 +1,9 @@
 //! Entry point: parse the CLI, dispatch to the library, render results.
 //!
 //! Exit codes: 0 ok · 1 error · 2 completed but with skipped archives
-//! (offline / v2-limited / incomplete), or a `diff` whose comparison is not
-//! complete — scripts can rely on this.
+//! (offline / v2-limited / incomplete), a `diff` whose comparison is not
+//! complete, or a `coverage` report that is not complete (a degraded source
+//! or an unknown result) — scripts can rely on this.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
