@@ -320,13 +320,18 @@ fn master_and_indexes_are_read_with_nothing_written_beside_them() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = pair(tmp.path());
     // A distinct identity, so the master registers it as a third source.
+    // The master refuses to register a WAL-mode index (#104), so it turns
+    // WAL only after registration; loading it must still write nothing.
     let wal_header = altered_copy(
         &b,
         "wal.db",
-        "UPDATE meta SET value = 'wal-uuid' WHERE key = 'index_uuid';
-         PRAGMA journal_mode=WAL;",
+        "UPDATE meta SET value = 'wal-uuid' WHERE key = 'index_uuid';",
     );
     let master = master_with(tmp.path(), &[&a, &b, &wal_header]);
+    rusqlite::Connection::open(&wal_header)
+        .unwrap()
+        .execute_batch("PRAGMA journal_mode=WAL;")
+        .unwrap();
     // The master itself is a WAL database; idle, it has no sidecar.
     for sidecar in ["master.db-wal", "master.db-shm", "master.db-journal"] {
         assert!(!tmp.path().join(sidecar).exists(), "{sidecar}");
