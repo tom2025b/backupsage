@@ -4,24 +4,34 @@
 //! pure engine, and says plainly what it could and could not establish about
 //! each input. See ADR 0010 for the evidence rules.
 //!
-//! **Nothing here writes.** An index is opened with SQLite's read-only flag
-//! plus the `immutable` URI parameter. A read-only open alone is not enough:
-//! on a WAL-mode database it creates `-shm`/`-wal` files beside the index. An
-//! immutable open never creates, locks or recovers anything, but it would
-//! silently ignore uncommitted WAL frames or a hot rollback journal. So an
-//! index with a `-wal` or `-journal` sidecar is refused as unavailable before
-//! opening, and checked again after reading. The only other file-system
-//! access is a `stat` of the recorded source, for [`SourceCurrency`].
+//! **Nothing here writes, and nothing mixed is called complete.** An index
+//! is read with a `mode=ro` SQLite connection inside one read transaction.
+//! Its shared lock stops any SQLite writer from committing mid-read, so the
+//! rows form one snapshot. Every layout SQLite could only read by writing
+//! beside the index, or by trusting a name that hides its journal, is refused
+//! as unavailable before opening:
+//! - a `-wal` or `-journal` sidecar (checked under the given and resolved
+//!   names);
+//! - a WAL-mode header, because reading one creates `-shm`/`-wal`;
+//! - more than one hard link, because a journal beside another name would be
+//!   invisible from this one.
+//!
+//! A before/after stamp of the file (inode, links, size, mtime, ctime) fails
+//! closed on an in-place writer that ignores SQLite locking. The only other
+//! file-system access is a `stat` of the recorded source, for
+//! [`SourceCurrency`].
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension};
 use serde::Serialize;
 
 use crate::diff::{
@@ -44,6 +54,17 @@ pub enum NoteCode {
     /// Unavailable: a `-wal` or `-journal` sidecar holds changes that only a
     /// recovering (writing) open could apply.
     PendingJournal,
+    /// Unavailable: the index is in WAL mode. Reading it would create
+    /// `-shm`/`-wal` files beside it, which diff never does.
+    WalModeIndex,
+    /// Unavailable: the file has more than one hard link, so a journal or
+    /// WAL beside another of its names would be invisible from this one.
+    IndexMultiplyLinked,
+    /// Unavailable: a writer held the index longer than diff waits.
+    IndexBusy,
+    /// Unavailable: the file changed while it was read, so the rows may mix
+    /// two states.
+    IndexChangedDuringRead,
     /// Incomplete: indexing stopped before it finished.
     IndexIncomplete,
     /// Incompatible: not a v3 index.
@@ -104,10 +125,83 @@ pub struct LoadedIndex {
     pub health: InputHealth,
 }
 
-/// Open an index strictly read-only (see the module docs). Callers must
-/// have checked for sidecars first; [`load_index`] does.
-pub fn open_index_readonly(db_path: &Path) -> Result<Connection> {
-    let absolute = std::path::absolute(db_path)?;
+/// What must not change between checking an index and finishing its read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    dev: u64,
+    ino: u64,
+    nlink: u64,
+    size: u64,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+
+impl FileStamp {
+    fn of(md: &fs::Metadata) -> Self {
+        Self {
+            dev: md.dev(),
+            ino: md.ino(),
+            nlink: md.nlink(),
+            size: md.size(),
+            mtime: (md.mtime(), md.mtime_nsec()),
+            ctime: (md.ctime(), md.ctime_nsec()),
+        }
+    }
+}
+
+/// How long a read waits for a committing writer before giving up.
+const BUSY_WAIT: Duration = Duration::from_secs(2);
+
+/// Every guard that must hold before SQLite may open the file (see the
+/// module docs). Returns the stamp to compare after reading.
+fn check_index_file(db_path: &Path) -> std::result::Result<FileStamp, InputNote> {
+    let md = match fs::metadata(db_path) {
+        Ok(md) if md.is_file() => md,
+        Ok(_) => return Err(note(NoteCode::IndexUnreadable, "not a regular file")),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(note(NoteCode::IndexMissing, "no index file at this path"));
+        }
+        Err(e) => return Err(note(NoteCode::IndexUnreadable, e.to_string())),
+    };
+    if md.nlink() > 1 {
+        return Err(note(
+            NoteCode::IndexMultiplyLinked,
+            format!(
+                "the file has {} hard links; a journal beside another name would be \
+                 invisible from this one (copy the index to diff it)",
+                md.nlink()
+            ),
+        ));
+    }
+    let sidecars = pending_sidecars(db_path);
+    if !sidecars.is_empty() {
+        return Err(pending(&sidecars));
+    }
+    let mut header = [0u8; 100];
+    fs::File::open(db_path)
+        .and_then(|mut f| f.read_exact(&mut header))
+        .map_err(|_| note(NoteCode::NotABackupsageIndex, "not an SQLite database"))?;
+    if &header[..16] != b"SQLite format 3\0" {
+        return Err(note(
+            NoteCode::NotABackupsageIndex,
+            "not an SQLite database",
+        ));
+    }
+    // Header bytes 18 and 19 are the write and read format versions:
+    // 1 is rollback journal, 2 is WAL.
+    if header[18] == 2 || header[19] == 2 {
+        return Err(note(
+            NoteCode::WalModeIndex,
+            "the index is in WAL mode; reading it would create -shm/-wal files \
+             beside it (BackupSage writes rollback-journal indexes)",
+        ));
+    }
+    Ok(FileStamp::of(&md))
+}
+
+fn open_checked(db_path: &Path) -> std::result::Result<Connection, InputNote> {
+    let absolute =
+        std::path::absolute(db_path).map_err(|e| note(NoteCode::IndexUnreadable, e.to_string()))?;
     let mut uri = b"file:".to_vec();
     for &byte in absolute.as_os_str().as_bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
@@ -116,14 +210,95 @@ pub fn open_index_readonly(db_path: &Path) -> Result<Connection> {
             uri.extend_from_slice(format!("%{byte:02X}").as_bytes());
         }
     }
-    uri.extend_from_slice(b"?mode=ro&immutable=1");
+    // readonly_shm: should the file turn WAL between the header check and
+    // the open, SQLite must still never create a -shm beside it.
+    uri.extend_from_slice(b"?mode=ro&readonly_shm=1");
     let conn = Connection::open_with_flags(
         PathBuf::from(OsString::from_vec(uri)),
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
+    )
+    .map_err(|e| sqlite_note(&e))?;
+    conn.busy_timeout(BUSY_WAIT).map_err(|e| sqlite_note(&e))?;
     Ok(conn)
+}
+
+/// Open an index strictly read-only, after every guard in the module docs.
+/// Read it inside one transaction, as [`load_index`] does.
+pub fn open_index_readonly(db_path: &Path) -> std::result::Result<Connection, InputNote> {
+    check_index_file(db_path)?;
+    open_checked(db_path)
+}
+
+fn sqlite_note(e: &rusqlite::Error) -> InputNote {
+    match e.sqlite_error_code() {
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => note(
+            NoteCode::IndexBusy,
+            format!(
+                "a writer held the index for more than {}s",
+                BUSY_WAIT.as_secs()
+            ),
+        ),
+        _ => note(NoteCode::IndexUnreadable, e.to_string()),
+    }
+}
+
+fn read_note(e: &anyhow::Error) -> InputNote {
+    match e.downcast_ref::<rusqlite::Error>() {
+        Some(sqlite) => sqlite_note(sqlite),
+        None => note(NoteCode::IndexUnreadable, format!("{e:#}")),
+    }
+}
+
+fn pending(sidecars: &[String]) -> InputNote {
+    note(
+        NoteCode::PendingJournal,
+        format!(
+            "{} beside the index: it is being written or was interrupted, \
+             and reading it would require recovery that modifies it",
+            sidecars.join(" and ")
+        ),
+    )
+}
+
+/// Where a test hook may run during a read.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadPoint {
+    /// After the metadata statements, before the rows statement.
+    BetweenStatements,
+    /// After the first row, while the rows statement is still stepping.
+    BetweenRows,
+}
+
+type MidReadHook = (ReadPoint, Box<dyn FnOnce()>);
+
+thread_local! {
+    static MID_READ_HOOK: RefCell<Option<MidReadHook>> = const { RefCell::new(None) };
+}
+
+/// Test support: run `hook` once, on this thread, at `point` of the next
+/// index read, so a test can act as a writer in the middle of a read.
+#[doc(hidden)]
+pub fn set_mid_read_hook(point: ReadPoint, hook: impl FnOnce() + 'static) {
+    MID_READ_HOOK.with(|slot| *slot.borrow_mut() = Some((point, Box::new(hook))));
+}
+
+fn run_mid_read_hook(point: ReadPoint) {
+    let hook = MID_READ_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        match slot.take() {
+            Some((at, hook)) if at == point => Some(hook),
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 /// Sidecars whose presence means the main file alone is not the database.
@@ -201,44 +376,21 @@ fn read_index(
     health: &mut InputHealth,
     recorded: &mut RecordedStat,
 ) -> std::result::Result<Vec<Entry>, InputNote> {
-    match fs::metadata(db_path) {
-        Ok(md) if md.is_file() => {}
-        Ok(_) => {
-            return Err(note(NoteCode::IndexUnreadable, "not a regular file"));
-        }
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Err(note(NoteCode::IndexMissing, "no index file at this path"));
-        }
-        Err(e) => return Err(note(NoteCode::IndexUnreadable, e.to_string())),
-    }
-    let pending = |sidecars: Vec<String>| {
-        note(
-            NoteCode::PendingJournal,
-            format!(
-                "{} beside the index: it is being written or was interrupted, \
-                 and reading it would require recovery that modifies it",
-                sidecars.join(" and ")
-            ),
-        )
-    };
-    let sidecars = pending_sidecars(db_path);
-    if !sidecars.is_empty() {
-        return Err(pending(sidecars));
-    }
-    let conn = open_index_readonly(db_path)
-        .map_err(|e| note(NoteCode::IndexUnreadable, format!("{e:#}")))?;
+    let before = check_index_file(db_path)?;
+    let conn = open_checked(db_path)?;
+    // One read transaction for every statement: its shared lock stops a
+    // writer from committing until the read is over.
+    conn.execute_batch("BEGIN").map_err(|e| sqlite_note(&e))?;
     let has_fts = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE name = 'files_fts'",
             [],
             |_| Ok(()),
         )
-        .is_ok();
-    if !has_fts {
-        return Err(note(
-            NoteCode::NotABackupsageIndex,
-            "no files_fts table (or not an SQLite database)",
-        ));
+        .optional()
+        .map_err(|e| sqlite_note(&e))?;
+    if has_fts.is_none() {
+        return Err(note(NoteCode::NotABackupsageIndex, "no files_fts table"));
     }
 
     info.schema_version = get_meta(&conn, "schema_version").and_then(|v| v.parse().ok());
@@ -299,17 +451,27 @@ fn read_index(
 
     // Rows are read only from a v3 layout; another schema is reported as
     // incompatible with no rows rather than guessed at.
+    run_mid_read_hook(ReadPoint::BetweenStatements);
     let entries = if info.schema_version == Some(SCHEMA_VERSION) {
-        read_rows(&conn).map_err(|e| note(NoteCode::IndexUnreadable, format!("{e:#}")))?
+        read_rows(&conn).map_err(|e| read_note(&e))?
     } else {
         Vec::new()
     };
+    conn.execute_batch("COMMIT").map_err(|e| sqlite_note(&e))?;
     drop(conn);
 
-    // A sidecar that appeared while reading means the file changed under us.
+    // Belt and braces for writers that ignore SQLite locking: the file must
+    // be exactly as it was, with no sidecar beside it.
     let sidecars = pending_sidecars(db_path);
     if !sidecars.is_empty() {
-        return Err(pending(sidecars));
+        return Err(pending(&sidecars));
+    }
+    if fs::metadata(db_path).ok().map(|md| FileStamp::of(&md)) != Some(before) {
+        return Err(note(
+            NoteCode::IndexChangedDuringRead,
+            "the index file changed while it was read (inode, links, size, mtime or \
+             ctime), so its rows may mix two states",
+        ));
     }
     health.notes.extend(notes);
     Ok(entries)
@@ -357,6 +519,9 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
                 .transpose()?,
             flags: row.get(10)?,
         });
+        if entries.len() == 1 {
+            run_mid_read_hook(ReadPoint::BetweenRows);
+        }
     }
     Ok(entries)
 }

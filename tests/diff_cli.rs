@@ -19,7 +19,7 @@ use std::process::{Command, Output};
 use std::time::{Duration, UNIX_EPOCH};
 
 use backupsage::diff::{Side, SnapshotState};
-use backupsage::diff_input::{self, MoveBlocker, MoveBlockerCause, NoteCode};
+use backupsage::diff_input::{self, MoveBlocker, MoveBlockerCause, NoteCode, ReadPoint};
 use backupsage::indexer::{self, IndexOptions};
 use backupsage::report::to_hex;
 use backupsage::store::flags;
@@ -814,38 +814,50 @@ fn assert_same_tree(expected: &TreeState, actual: &TreeState, context: &str) {
 fn readonly_open_is_not_writable_and_creates_no_sidecar() {
     let tmp = tempfile::tempdir().unwrap();
     let (before, _) = clean_corpus(tmp.path());
+    let state = tree_state(tmp.path());
+    let conn = diff_input::open_index_readonly(&before).unwrap();
+    assert!(
+        conn.is_readonly(rusqlite::MAIN_DB).unwrap(),
+        "opened writable"
+    );
+    let rows: i64 = conn
+        .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .unwrap();
+    assert!(rows > 0);
+    assert!(conn.execute_batch("CREATE TABLE zz (x)").is_err());
+    assert!(conn
+        .execute_batch("UPDATE meta SET value = 'x' WHERE key = 'source'")
+        .is_err());
+    drop(conn);
+    assert_same_tree(
+        &state,
+        &tree_state(tmp.path()),
+        "opening changed the directory",
+    );
+
+    // A WAL-mode index could only be read by creating -shm/-wal beside it,
+    // so it is refused before SQLite ever opens it.
     let wal_header = wal_header_copy(&before);
-    for db in [&before, &wal_header] {
-        let state = tree_state(tmp.path());
-        let conn = diff_input::open_index_readonly(db).unwrap();
-        assert!(
-            conn.is_readonly(rusqlite::MAIN_DB).unwrap(),
-            "{}: opened writable",
-            db.display()
-        );
-        let rows: i64 = conn
-            .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
-            .unwrap();
-        assert!(rows > 0);
-        assert!(conn.execute_batch("CREATE TABLE zz (x)").is_err());
-        assert!(conn
-            .execute_batch("UPDATE meta SET value = 'x' WHERE key = 'source'")
-            .is_err());
-        drop(conn);
-        assert_same_tree(
-            &state,
-            &tree_state(tmp.path()),
-            &format!("opening {} changed the directory", db.display()),
-        );
-    }
+    let state = tree_state(tmp.path());
+    let refused = diff_input::open_index_readonly(&wal_header).map(|_| ());
+    assert_eq!(refused.unwrap_err().code, NoteCode::WalModeIndex);
+    assert_same_tree(
+        &state,
+        &tree_state(tmp.path()),
+        "refusing a WAL index changed the directory",
+    );
 }
 
 #[test]
 fn diff_never_modifies_or_creates_anything_beside_its_inputs() {
     let tmp = tempfile::tempdir().unwrap();
     let (before, after) = clean_corpus(tmp.path());
+    let linked = altered_copy(&before, "linked.db", "SELECT 1;");
+    let alias = tmp.path().join("alias.db");
+    fs::hard_link(&linked, &alias).unwrap();
     let inputs = [
         before.clone(),
+        alias,
         wal_header_copy(&before),
         altered_copy(
             &before,
@@ -908,5 +920,147 @@ fn pending_journal_or_wal_is_unavailable_and_left_alone() {
         let loaded = diff_input::load_index(&link);
         assert_eq!(loaded.snapshot.info.state, SnapshotState::Unavailable);
         assert_eq!(loaded.health.notes[0].code, NoteCode::PendingJournal);
+    }
+
+    let wal_header = wal_header_copy(&before);
+    let loaded = diff_input::load_index(&wal_header);
+    assert_eq!(loaded.snapshot.info.state, SnapshotState::Unavailable);
+    assert_eq!(loaded.health.notes[0].code, NoteCode::WalModeIndex);
+}
+
+// ── Consistency: a mixed snapshot is never called complete ──────────────────
+
+/// The clean corpus's before index plus 4,000 more rows, so that its `files`
+/// table spans many pages and a read can be interrupted between them.
+fn bulk_index(dir: &Path) -> PathBuf {
+    let (before, _) = clean_corpus(dir);
+    altered_copy(
+        &before,
+        "bulk.db",
+        "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < 4000)
+         INSERT INTO files (path, entry_type, kind, size, mtime_unix, mode, content_hash, flags)
+         SELECT 'bulk/' || i, 'file', 'binary', 32, 1700000001, 420, randomblob(32), 0 FROM r;",
+    )
+}
+
+/// How many rows carry the original mtime and how many the bumped one.
+fn old_and_new(loaded: &diff_input::LoadedIndex) -> (usize, usize) {
+    let old = |e: &&backupsage::diff::Entry| e.mtime_unix == Some(MTIME as i64);
+    let new = |e: &&backupsage::diff::Entry| e.mtime_unix == Some(MTIME as i64 + 1);
+    let rows = &loaded.snapshot.entries;
+    (
+        rows.iter().filter(old).count(),
+        rows.iter().filter(new).count(),
+    )
+}
+
+const BUMP_MTIMES: &str = "UPDATE files SET mtime_unix = mtime_unix + 1;";
+
+#[test]
+fn sqlite_writer_cannot_commit_in_the_middle_of_a_read() {
+    // Between two rows of one statement, and between the metadata and the
+    // rows: the read transaction must cover both gaps.
+    for point in [ReadPoint::BetweenRows, ReadPoint::BetweenStatements] {
+        let tmp = tempfile::tempdir().unwrap();
+        let bulk = bulk_index(tmp.path());
+        let outcome = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (db, seen) = (bulk.clone(), outcome.clone());
+        diff_input::set_mid_read_hook(point, move || {
+            let writer = rusqlite::Connection::open(&db).unwrap();
+            writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+            let result = writer.execute_batch(&format!(
+                "BEGIN IMMEDIATE; {BUMP_MTIMES}
+                 UPDATE meta SET value = 'rewritten' WHERE key = 'index_uuid'; COMMIT;"
+            ));
+            let _ = writer.execute_batch("ROLLBACK");
+            *seen.borrow_mut() = Some(result.map_err(|e| e.to_string()));
+        });
+        let loaded = diff_input::load_index(&bulk);
+        let writer = outcome.borrow_mut().take().expect("the hook ran mid-read");
+        let (old, new) = old_and_new(&loaded);
+
+        // Never a mixed snapshot reported as complete.
+        assert!(
+            !(old > 0 && new > 0) || loaded.snapshot.info.state != SnapshotState::Complete,
+            "{point:?}: mixed snapshot ({old} old, {new} new) reported complete"
+        );
+        // Concretely: the read transaction's lock refused the commit, so the
+        // snapshot is the one from before the write, whole.
+        assert!(writer.is_err(), "{point:?}: the writer committed mid-read");
+        assert_eq!(
+            loaded.snapshot.info.state,
+            SnapshotState::Complete,
+            "{point:?}"
+        );
+        assert_eq!((old, new), (loaded.snapshot.entries.len(), 0), "{point:?}");
+        assert_ne!(
+            loaded.snapshot.info.index_uuid.as_deref(),
+            Some("rewritten"),
+            "{point:?}"
+        );
+    }
+}
+
+#[test]
+fn in_place_write_that_ignores_locking_makes_the_index_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bulk = bulk_index(tmp.path());
+    let bumped = altered_copy(&bulk, "bumped.db", BUMP_MTIMES);
+    let replacement = fs::read(&bumped).unwrap();
+    assert_eq!(replacement.len() as u64, fs::metadata(&bulk).unwrap().len());
+    let db = bulk.clone();
+    diff_input::set_mid_read_hook(ReadPoint::BetweenRows, move || {
+        // Same inode, same size, new bytes; no SQLite lock is consulted.
+        let mut file = fs::OpenOptions::new().write(true).open(&db).unwrap();
+        std::io::Write::write_all(&mut file, &replacement).unwrap();
+    });
+    let loaded = diff_input::load_index(&bulk);
+    assert_eq!(loaded.snapshot.info.state, SnapshotState::Unavailable);
+    assert!(loaded.snapshot.entries.is_empty());
+    assert_eq!(
+        loaded.health.notes[0].code,
+        NoteCode::IndexChangedDuringRead
+    );
+}
+
+#[test]
+fn hardlinked_index_is_unavailable_because_its_journal_may_hide_elsewhere() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (before, after) = clean_corpus(tmp.path());
+    // hot.db has a hot -journal; alias.db is the same file under a name
+    // with no journal beside it, so nothing at alias.db says it is torn.
+    let hot = hot_journal_copy(&before);
+    let alias = tmp.path().join("alias.db");
+    fs::hard_link(&hot, &alias).unwrap();
+    // The WAL case from review: committed frames beside the real name only.
+    let pending = pending_wal_copy(&before);
+    let wal_alias = tmp.path().join("wal-alias.db");
+    fs::hard_link(&pending, &wal_alias).unwrap();
+    // A clean index with a second name is refused too: the check cannot see
+    // what the other name's directory holds.
+    let clean = altered_copy(&before, "clean.db", "SELECT 1;");
+    let clean_alias = tmp.path().join("clean-alias.db");
+    fs::hard_link(&clean, &clean_alias).unwrap();
+
+    for db in [&alias, &wal_alias, &clean_alias] {
+        let loaded = diff_input::load_index(db);
+        assert_eq!(
+            loaded.snapshot.info.state,
+            SnapshotState::Unavailable,
+            "{}",
+            db.display()
+        );
+        assert!(loaded.snapshot.entries.is_empty());
+        assert_eq!(
+            loaded.health.notes[0].code,
+            NoteCode::IndexMultiplyLinked,
+            "{}",
+            db.display()
+        );
+        let out = diff(db, &after, true);
+        assert_eq!(code(&out), 2);
+        let doc = json(&out);
+        assert_eq!(doc["comparison_state"], "unavailable");
+        assert_eq!(summary(&doc)[..6], [0; 6], "classified through an alias");
     }
 }

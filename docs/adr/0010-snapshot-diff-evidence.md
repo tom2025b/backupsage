@@ -114,38 +114,72 @@ Date: 2026-09-26 · Status: accepted · Issue: #93 (child of #13)
 `backupsage diff BEFORE_DB AFTER_DB [--json]` loads both indexes through
 `diff_input` and compares them with the unchanged engine rules above.
 
-### Read-only loading
+### Read-only and consistent loading
 
-Diffing two indexes must never modify either one. `diff_input::open_index_readonly`
-opens with `SQLITE_OPEN_READ_ONLY` and the URI parameters `mode=ro&immutable=1`.
+Diffing two indexes must never modify either one, and must never call a
+mixed snapshot complete. `diff_input` reads each index with
+`SQLITE_OPEN_READ_ONLY` and `mode=ro&readonly_shm=1`, inside **one read
+transaction**. Its shared lock makes a SQLite writer's commit fail with
+"database is locked" (or wait for the read to end), so the metadata and every
+row come from one snapshot.
+
+The first revision of #93 used `immutable=1` instead. The #93 cross-family
+review reproduced two P1s against it, and this section replaces that design:
+- `immutable=1` disables locking and change detection. A writer committing
+  mid-read yielded 2,108 old and 1,892 new rows, reported `complete` with
+  exit 0.
+- A hardlinked second name hid a pending `-wal` from the sidecar check.
+
 Measured against the bundled SQLite 3.51.3:
 
-| Open | WAL-mode index, no sidecar | Pending `-wal` | Hot `-journal` |
-|---|---|---|---|
-| read-only flag, with or without `mode=ro` | reads correctly, but **creates** `-shm` and `-wal` beside the index | reads, creates `-shm` | refuses |
-| `immutable=1` | reads correctly, creates nothing | creates nothing, but **ignores** the committed frames | creates nothing, but reads **torn** pages |
+| Open | Rollback-journal index | WAL-mode index, no sidecar | Pending `-wal` | Hot `-journal` |
+|---|---|---|---|---|
+| read-only (± `mode=ro`) | reads; creates nothing; its read transaction blocks a writer's commit | **creates** `-shm` and `-wal` | creates `-shm` | refuses |
+| `+ readonly_shm=1` | as above | creates an empty `-wal`, then refuses | — | — |
+| `immutable=1` | reads with **no locking**: a mid-read commit yields a mixed snapshot | reads, creates nothing | **ignores** the committed frames | reads **torn** pages |
 
-So an index with a `-wal` or `-journal` sidecar is `unavailable`
-(`pending_journal`): the main file alone is not the database, and only a
-recovering (writing) open could make it one. The check runs before opening and
-again after reading. Every other index is opened immutable, which never creates,
-locks, recovers or writes anything. A missing path is never opened, so it is
-never created. The only other file-system access is a `stat` of the recorded
-source, for currency. Residual: an outside writer changing an index in place
-during the read is not detected. BackupSage itself only ever replaces an index by
-renaming a finished file over it.
+So every layout SQLite could only read by writing beside the index, or by
+trusting a name that hides its journal, is `unavailable` before SQLite opens
+anything:
+- **`pending_journal`:** a `-wal` or `-journal` exists beside the given name or
+  the symlink-resolved one. Only a recovering, writing open could read it.
+- **`wal_mode_index`:** header bytes 18 or 19 are 2. Reading would create
+  `-shm`/`-wal`. BackupSage writes rollback-journal indexes, since the indexer
+  folds WAL before promotion, so this only refuses converted or externally
+  written indexes.
+- **`index_multiply_linked`:** the file has more than one hard link. SQLite
+  names sidecars after the path it opens, so a journal beside another name is
+  invisible from this one, and no check can list the other names. This also
+  refuses indexes inside hardlink-deduplicated backup trees (for example
+  `cp -al` or rsnapshot). Copying the index gives it a single link.
+- **`index_busy`:** a writer held the index for more than 2 s.
 
-`searcher::open_index` (used by `search`, `top` and `inspect`) still uses the
-plain read-only open, so it would create sidecars beside a WAL-mode index.
-Indexes BackupSage writes are folded back to rollback-journal mode before they
-are promoted, so only converted or externally modified indexes are affected. It is
-outside #93's scope and left for a follow-up.
+After the read, a before/after stamp of the file (device, inode, link count,
+size, mtime and ctime) must match, and no sidecar may have appeared. Otherwise
+the index is `index_changed_during_read`. This is an extra fail-closed layer
+for writers that ignore SQLite locking, not the guarantee. A missing path is
+never opened, so it is never created. The only other file-system access is a
+`stat` of the recorded source, for currency.
+
+**Scope.** BackupSage's own index publication renames a finished file over
+the old one. A diff that races it reads one coherent version: the review's run
+returned all 4,000 old rows. A torn read needs an **in-place** writer, such as
+another SQLite client, a sync tool or a raw copy over the file. It is still a
+P1, because the tool must never call a mixed snapshot complete.
+
+**Residual.** A writer that converts the index to WAL mode in the instant
+between the header check and the open could make SQLite create an empty
+`-wal` before it refuses the read (`readonly_shm=1` rules out a `-shm`). The
+read then fails as unavailable.
+
+`searcher::open_index` (used by `search`, `top` and `inspect`) still uses a plain
+read-only open. It is outside #93's scope and left for a follow-up.
 
 ### Input health
 
 | State | When |
 |---|---|
-| `unavailable` | missing, unreadable or not a regular file; not a BackupSage index; pending journal; a malformed row (for example a hash that is not 32 bytes) |
+| `unavailable` | missing, unreadable or not a regular file; not a BackupSage index; pending journal; WAL mode; more than one hard link; busy; changed during the read; a malformed row (for example a hash that is not 32 bytes) |
 | `incompatible` | `schema_version` is not 3, `hash_algo` is not `blake3`, or there is no `index_uuid`. Rows are read only from a v3 layout. |
 | `incomplete` | `completed` is not `1` |
 | `complete` | otherwise |
@@ -207,18 +241,19 @@ the engine refuses contradictory rows, such as a non-positive file ID.
 `tests/diff_cli.rs` runs the real binary over tar and directory corpora that
 include duplicate paths, hardlinks, symlinks, PAX-sparse and old-GNU sparse
 entries, unparsed pax metadata and non-UTF-8 names. It covers unavailable,
-incomplete, pre-v3, stale, offline, relative-source and pending-journal inputs,
-plus every exit code. Each invariant test was shown to fail when its mechanism is
-removed, and again when it is weakened; the table is in this change's pull
-request. Two tests guard read-only behaviour:
-- **Writable open:** `readonly_open_is_not_writable_and_creates_no_sidecar`
-  fails if the connection reports writable, if a write succeeds, or if opening
-  changes the directory.
+incomplete, pre-v3, stale, offline, relative-source, pending-journal, WAL-mode
+and multiply-linked inputs, plus every exit code. Each invariant test was shown
+to fail when its mechanism is removed, and again when it is weakened; the table
+is in this change's pull request. Among them:
+- **Writable open:** `readonly_open_is_not_writable_and_creates_no_sidecar`.
 - **Any mutation:** `diff_never_modifies_or_creates_anything_beside_its_inputs`
-  runs every layout both ways and in both output modes. It fails if any file's
-  bytes, size, inode, mtime or ctime change, or if the directory gains or loses
-  an entry.
+  checks bytes, size, inode, mtime, ctime and directory entries.
+- **Consistency:** `sqlite_writer_cannot_commit_in_the_middle_of_a_read` has a
+  writer commit between two rows and between the metadata and the rows, through
+  a test-only hook. `in_place_write_that_ignores_locking_makes_the_index_unavailable`
+  overwrites the file in place mid-read.
+- **Hard links:** `hardlinked_index_is_unavailable_because_its_journal_may_hide_elsewhere`.
 
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-26T13:20:53-04:00
+**Signed:** max-cloud (Claude) · 2026-09-26T13:52:04-04:00
