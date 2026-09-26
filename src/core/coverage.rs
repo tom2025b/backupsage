@@ -221,6 +221,11 @@ impl UnknownRows {
     }
 }
 
+/// Flags under which a stored hash cannot prove a row's content: a read
+/// error cut the stream short, and unparsed pax records may hide sparse
+/// metadata, so the hash can cover condensed fragments (tests/sparse.rs).
+const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED;
+
 /// A row's size when it is the content length: sparse, unparsed-PAX and
 /// read-error sizes are not.
 fn trusted_size(row: &CoverageRow) -> Option<u64> {
@@ -244,8 +249,8 @@ struct Building {
 /// 1. The effective namespace is keyed on raw path bytes; the greatest file
 ///    id wins. Earlier rows are `Shadowed` exclusions and never count. The
 ///    stored `SHADOWED` flag is ignored: v3 computed it on display text.
-/// 2. Effective files with a hash and no read error are copies of that
-///    content; the rest are unknown content.
+/// 2. Effective files with a hash and neither a read error nor unparsed pax
+///    records are copies of that content; the rest are unknown content.
 /// 3. Hardlinks carry no bytes: an alias when an effective same-source copy
 ///    of their hash exists, otherwise an `UnmatchedHardlink` exclusion.
 ///    Symlinks are excluded.
@@ -312,7 +317,7 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                     reason: ExclusionReason::Symlink,
                 }),
                 (EntryKind::Hardlink, _) => hardlinks.push(row),
-                (EntryKind::File, Some(hash)) if row.flags & flags::READ_ERROR == 0 => {
+                (EntryKind::File, Some(hash)) if row.flags & UNTRUSTED_HASH == 0 => {
                     let building = groups.entry(hash).or_default();
                     building.copies.entry(id).or_default().push(row_ref(row));
                     building.sizes.extend(trusted_size(row));
@@ -320,6 +325,8 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                 (EntryKind::File, _) => {
                     let reason = if row.flags & flags::READ_ERROR != 0 {
                         UnknownContentReason::ReadError
+                    } else if row.flags & flags::PAX_UNPARSED != 0 {
+                        UnknownContentReason::PaxUnparsed
                     } else if row.flags & flags::SPARSE != 0 {
                         UnknownContentReason::UnsupportedSparse
                     } else {
