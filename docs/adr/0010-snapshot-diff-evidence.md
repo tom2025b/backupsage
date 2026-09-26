@@ -50,7 +50,9 @@ The comparison rules, applied in order, are:
    raw link targets remain reviewable in the report.
 4. An unmatched path is `moved` only when both snapshots are compatible and
    complete, the full hash appears exactly once in **all** rows on each side,
-   sizes agree, and both paths are unmatched effective entries. Matched paths
+   sizes agree, both paths are unmatched effective entries, and the content is
+   not empty: every empty file shares one hash, so size 0 carries no identity
+   evidence and never establishes a move. Matched paths
    and shadowed rows participate in multiplicity. Any unknown content anywhere
    prevents proving global uniqueness and therefore suppresses moves. This is
    deliberately conservative, including for snapshots containing links.
