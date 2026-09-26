@@ -249,6 +249,23 @@ fn hardlink_without_a_same_source_copy_is_excluded_and_changes_nothing() {
 }
 
 #[test]
+fn hardlink_in_a_later_source_never_aliases_another_sources_copy() {
+    // The group already exists when source 2 is processed; its hardlink must
+    // still find no same-source copy.
+    let cov = run(&[
+        complete(1, vec![file(1, "f", 1, 5)]),
+        complete(2, vec![link(1, "l", EntryKind::Hardlink, Some(1))]),
+    ]);
+    let g = find(&cov, 1);
+    assert!(g.aliases.is_empty());
+    assert_eq!(g.replicas, ReplicaCount::Exact(1));
+    assert_eq!(presence(&cov, 1, 2), Presence::Absent);
+    assert_eq!(cov.exclusions.len(), 1);
+    assert_eq!(cov.exclusions[0].row, rref(2, "l", 1));
+    assert_eq!(cov.exclusions[0].reason, ExclusionReason::UnmatchedHardlink);
+}
+
+#[test]
 fn hardlink_alone_never_forms_a_group() {
     let cov = run(&[complete(
         1,
@@ -346,6 +363,70 @@ fn unhashed_row_that_could_match_makes_a_complete_source_unknown() {
 }
 
 #[test]
+fn ordinary_unhashed_row_of_equal_size_makes_a_complete_source_unknown() {
+    let cov = run(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        complete(2, vec![unhashed(1, "plain", 5, 0)]),
+    ]);
+    assert_eq!(
+        presence(&cov, 1, 2),
+        Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows: 1 })
+    );
+    assert_eq!(find(&cov, 1).replicas, ReplicaCount::AtLeast(1));
+    assert_eq!(
+        cov.unknown_content[0].reason,
+        UnknownContentReason::NotHashed
+    );
+}
+
+#[test]
+fn read_error_row_of_differing_size_makes_a_complete_source_unknown() {
+    // A read error's recorded size is not trusted to rule content out.
+    let cov = run(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        complete(2, vec![unhashed(1, "broken", 99, flags::READ_ERROR)]),
+    ]);
+    assert_eq!(
+        presence(&cov, 1, 2),
+        Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows: 1 })
+    );
+    assert_eq!(find(&cov, 1).replicas, ReplicaCount::AtLeast(1));
+}
+
+#[test]
+fn hashed_pax_unparsed_row_proves_neither_presence_nor_absence() {
+    // Pinned by tests/sparse.rs: a crafted pax block can hide sparse records
+    // from tar-rs, so the stored hash may cover condensed fragments rather
+    // than the logical file, and the recorded size may be wrong too.
+    let mut fragment = file(1, "g2c.bin", 1, 21);
+    fragment.flags = flags::PAX_UNPARSED;
+    let cov = run(&[
+        complete(1, vec![fragment]),
+        complete(2, vec![file(1, "same-hash", 1, 21)]),
+        complete(3, vec![file(1, "logical", 2, 40960)]),
+    ]);
+
+    // Not a copy: the matching hash elsewhere stays a single replica...
+    let g1 = find(&cov, 1);
+    assert_eq!(g1.copies, vec![rref(2, "same-hash", 1)]);
+    assert_eq!(g1.replicas, ReplicaCount::AtLeast(1));
+    // ...and not an absence: it could be any content, at any size.
+    for hash in [1, 2] {
+        assert_eq!(
+            presence(&cov, hash, 1),
+            Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows: 1 })
+        );
+    }
+    assert_eq!(find(&cov, 2).replicas, ReplicaCount::AtLeast(1));
+    assert_eq!(cov.unknown_content.len(), 1);
+    assert_eq!(cov.unknown_content[0].row, rref(1, "g2c.bin", 1));
+    assert_eq!(
+        cov.unknown_content[0].reason,
+        UnknownContentReason::PaxUnparsed
+    );
+}
+
+#[test]
 fn hashed_row_with_a_read_error_is_unknown_content_not_a_copy() {
     let mut bad = file(1, "a", 1, 5);
     bad.flags = flags::READ_ERROR;
@@ -389,7 +470,7 @@ fn sparse_pax_unparsed_and_unknown_sizes_are_not_trusted() {
         ),
         (
             unhashed(1, "p", 99, flags::PAX_UNPARSED),
-            UnknownContentReason::NotHashed,
+            UnknownContentReason::PaxUnparsed,
         ),
         (unknown_size, UnknownContentReason::NotHashed),
     ];

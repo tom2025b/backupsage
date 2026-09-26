@@ -141,6 +141,9 @@ pub struct ContentGroup {
 pub enum UnknownContentReason {
     ReadError,
     UnsupportedSparse,
+    /// Unparsed pax records may hide sparse metadata: any hash covers what
+    /// tar-rs read, which need not be the logical file.
+    PaxUnparsed,
     NotHashed,
 }
 
