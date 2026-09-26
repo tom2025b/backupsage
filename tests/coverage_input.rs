@@ -314,7 +314,13 @@ fn master_with(dir: &Path, dbs: &[&Path]) -> PathBuf {
 fn master_and_indexes_are_read_with_nothing_written_beside_them() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = pair(tmp.path());
-    let wal_header = altered_copy(&b, "wal.db", "PRAGMA journal_mode=WAL;");
+    // A distinct identity, so the master registers it as a third source.
+    let wal_header = altered_copy(
+        &b,
+        "wal.db",
+        "UPDATE meta SET value = 'wal-uuid' WHERE key = 'index_uuid';
+         PRAGMA journal_mode=WAL;",
+    );
     let master = master_with(tmp.path(), &[&a, &b, &wal_header]);
     // The master itself is a WAL database; idle, it has no sidecar.
     for sidecar in ["master.db-wal", "master.db-shm", "master.db-journal"] {
