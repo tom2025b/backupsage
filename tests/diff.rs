@@ -1,8 +1,10 @@
 //! Pure diff contract (#92). Index ingestion and CLI coverage belong to #93.
+//! last_edited_by: codex
+//! **Signed:** codex · 2026-09-26T12:05:09-04:00
 use std::path::Path;
 
 use backupsage::diff::{
-    self, ChangeKind as Kind, Entry, EntryType, Reason, Snapshot, SnapshotInfo,
+    self, ChangeKind as Kind, Entry, EntryType, Reason, Side, Snapshot, SnapshotInfo,
     SnapshotState as State, SourceCurrency,
 };
 use backupsage::store::flags;
@@ -231,6 +233,202 @@ fn ambiguous_content_including_matched_and_shadowed_rows_never_moves() {
         assert_eq!(diff::compare(&before, &after).unwrap().summary.moved, 0);
         assert_eq!(diff::compare(&after, &before).unwrap().summary.moved, 0);
     }
+}
+
+// Compare exact identities and raw paths, so no row can silently disappear or
+// be consumed twice while the aggregate move count still looks plausible.
+type RowIdentity<'a> = Option<(i64, &'a str)>;
+
+fn change_rows(report: &diff::DiffReport) -> Vec<(Kind, RowIdentity<'_>, RowIdentity<'_>)> {
+    report
+        .changes
+        .iter()
+        .map(|c| {
+            (
+                c.kind,
+                c.before
+                    .as_ref()
+                    .map(|e| (e.file_id, e.path_bytes.as_str())),
+                c.after.as_ref().map(|e| (e.file_id, e.path_bytes.as_str())),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn duplicate_sources_cannot_claim_one_move_target() {
+    let before = snapshot(
+        "before",
+        vec![entry(1, b"a", Some(b"H")), entry(2, b"b", Some(b"H"))],
+    );
+    let after = snapshot("after", vec![entry(3, b"c", Some(b"H"))]);
+    let report = diff::compare(&before, &after).unwrap();
+    assert_eq!(report.summary.moved, 0);
+    assert_eq!(
+        change_rows(&report),
+        vec![
+            (Kind::Removed, Some((1, "61")), None),
+            (Kind::Removed, Some((2, "62")), None),
+            (Kind::Added, None, Some((3, "63"))),
+        ]
+    );
+    assert!(report.excluded.is_empty());
+}
+
+#[test]
+fn same_path_change_cannot_also_be_a_move_target() {
+    // Exercise both processing orders: the same-path row may be visited
+    // before or after the would-be move source in the raw-path namespace.
+    for (source, source_hex) in [(b"x", "78"), (b"z", "7a")] {
+        let before = snapshot(
+            "before",
+            vec![entry(1, source, Some(b"H")), entry(2, b"y", Some(b"Q"))],
+        );
+        let after = snapshot("after", vec![entry(3, b"y", Some(b"H"))]);
+        let report = diff::compare(&before, &after).unwrap();
+        assert_eq!(report.summary.moved, 0);
+        let mut expected = vec![
+            (Kind::Removed, Some((1, source_hex)), None),
+            (Kind::ContentChanged, Some((2, "79")), Some((3, "79"))),
+        ];
+        expected.sort_by_key(|row| row.1.unwrap().1);
+        assert_eq!(change_rows(&report), expected);
+        assert_eq!(report.summary.added, 0);
+        assert!(report.excluded.is_empty());
+    }
+}
+
+#[test]
+fn excluded_shadow_cannot_be_a_move_target() {
+    let before = snapshot("before", vec![entry(1, b"x", Some(b"H"))]);
+    // The hidden row's hash is unique on each side. Only the winning-row
+    // guard prevents a move to it; no duplicate hash or unknown row masks it.
+    let after = snapshot(
+        "after",
+        vec![entry(2, b"p", Some(b"H")), entry(3, b"p", Some(b"Z"))],
+    );
+    let report = diff::compare(&before, &after).unwrap();
+    assert_eq!(report.summary.moved, 0);
+    assert_eq!(
+        change_rows(&report),
+        vec![
+            (Kind::Added, None, Some((3, "70"))),
+            (Kind::Removed, Some((1, "78")), None),
+        ]
+    );
+    assert_eq!(report.excluded.len(), 1);
+    let excluded = &report.excluded[0];
+    assert_eq!(excluded.side, Side::After);
+    assert_eq!(excluded.reason, Reason::ShadowedPath);
+    assert_eq!(excluded.entry.file_id, 2);
+    assert_eq!(excluded.entry.path_bytes, "70");
+}
+
+#[test]
+fn copied_hardlink_hash_cannot_prove_a_move() {
+    let before = snapshot("before", vec![entry(1, b"f", Some(b"X"))]);
+    let mut link = entry(2, b"g", Some(b"X"));
+    link.entry_type = EntryType::Hardlink;
+    link.link_target = Some(b"target".to_vec());
+    let after = snapshot("after", vec![link]);
+    let report = diff::compare(&before, &after).unwrap();
+    assert_eq!(report.summary.moved, 0);
+    assert_eq!(
+        change_rows(&report),
+        vec![
+            (Kind::Removed, Some((1, "66")), None),
+            (Kind::Added, None, Some((2, "67"))),
+        ]
+    );
+    assert_eq!(
+        report.changes[1].after.as_ref().unwrap().entry_type,
+        EntryType::Hardlink
+    );
+    assert!(report.excluded.is_empty());
+    // The copied hash must not become identity evidence in either direction.
+    let reverse = diff::compare(&after, &before).unwrap();
+    assert_eq!(reverse.summary.moved, 0);
+    assert_eq!(
+        change_rows(&reverse),
+        vec![
+            (Kind::Added, None, Some((1, "66"))),
+            (Kind::Removed, Some((2, "67")), None),
+        ]
+    );
+}
+
+#[test]
+fn several_excluded_rows_have_byte_identical_reports_in_any_input_order() {
+    let mut before = snapshot(
+        "before",
+        vec![
+            entry(4, b"d", Some(b"d old")),
+            entry(3, b"c", Some(b"c middle")),
+            entry(2, b"c", Some(b"c old")),
+            entry(6, b"d", Some(b"d winner")),
+            entry(5, b"c", Some(b"c winner")),
+        ],
+    );
+    let mut after = before.clone();
+    after.info.index_uuid = Some("after".into());
+    after.entries.reverse();
+    let report = diff::compare(&before, &after).unwrap();
+    assert_eq!(report.summary.excluded, 6);
+    assert_eq!(
+        report
+            .excluded
+            .iter()
+            .map(|e| (e.side, e.entry.path_bytes.as_str(), e.entry.file_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (Side::Before, "63", 2),
+            (Side::Before, "63", 3),
+            (Side::Before, "64", 4),
+            (Side::After, "63", 2),
+            (Side::After, "63", 3),
+            (Side::After, "64", 4),
+        ]
+    );
+    let expected = report.to_json().unwrap();
+    // Vary the two inputs independently, including reversed ID order within
+    // one shadowed path and reversed path order among different shadows.
+    for _ in 0..before.entries.len() {
+        before.entries.rotate_left(1);
+        for _ in 0..after.entries.len() {
+            after.entries.rotate_left(1);
+            assert_eq!(
+                diff::compare(&before, &after).unwrap().to_json().unwrap(),
+                expected
+            );
+            after.entries.reverse();
+            assert_eq!(
+                diff::compare(&before, &after).unwrap().to_json().unwrap(),
+                expected
+            );
+            after.entries.reverse();
+        }
+    }
+}
+
+#[test]
+fn empty_content_does_not_prove_a_move_but_can_prove_same_path_equality() {
+    let before = snapshot("before", vec![entry(1, b"a", Some(b""))]);
+    let after = snapshot("after", vec![entry(2, b"z", Some(b""))]);
+    let report = diff::compare(&before, &after).unwrap();
+    assert_eq!(report.summary.moved, 0);
+    assert_eq!(
+        change_rows(&report),
+        vec![
+            (Kind::Removed, Some((1, "61")), None),
+            (Kind::Added, None, Some((2, "7a"))),
+        ]
+    );
+    let same = diff::compare(&before, &before).unwrap();
+    assert_eq!(same.comparison_state, State::Complete);
+    assert_eq!(
+        change_rows(&same),
+        vec![(Kind::ByteIdentical, Some((1, "61")), Some((1, "61")))]
+    );
 }
 
 #[test]

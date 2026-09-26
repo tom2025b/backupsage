@@ -3,6 +3,8 @@
 //! No source I/O, index discovery, or actions occur here. Callers supply index
 //! evidence; availability/currency is reported separately from snapshot facts.
 //! See ADR 0010 for comparison, shadow and conservative move rules.
+//! last_edited_by: codex
+//! **Signed:** codex · 2026-09-26T12:05:09-04:00
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -341,7 +343,8 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             continue;
         }
         let moved_to = trusted_hash(old).and_then(|hash| {
-            if !is_compatible || !before_hashes.contains_key(&hash) {
+            // Empty content carries no identity evidence for a move.
+            if !is_compatible || old.size == 0 || !before_hashes.contains_key(&hash) {
                 return None;
             }
             after_hashes.get(&hash).copied().filter(|new| {
