@@ -887,6 +887,74 @@ fn unreadable_archive_is_inconclusive_alone_and_beside_an_online_copy() {
     assert_eq!((g.trusted_replicas, g.unknown_sources), (1, 1));
 }
 
+// ── Review round 4 (PR #103): never open anything but the recorded kind ────
+
+/// Run `build` on a worker thread and fail, rather than hang, if it does
+/// not return within a few seconds. A blocked worker is left behind; the
+/// test process ends regardless.
+fn build_promptly(sources: Vec<RegistrySource>) -> LoadedCoverage {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(build(&sources));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the load hung opening the source")
+        .unwrap()
+}
+
+/// Replace the archive at `path` with a FIFO nobody writes to.
+fn replace_with_fifo(path: &Path) {
+    use std::os::unix::fs::FileTypeExt;
+    fs::remove_file(path).unwrap();
+    let ok = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo runs")
+        .success();
+    assert!(ok, "mkfifo failed");
+    assert!(fs::symlink_metadata(path).unwrap().file_type().is_fifo());
+}
+
+#[test]
+fn archive_replaced_by_a_fifo_or_directory_is_inconclusive_promptly() {
+    for what in ["fifo", "directory"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a_db, b, b_db) = online_and_unplugged(tmp.path());
+        if what == "fifo" {
+            replace_with_fifo(&b);
+        } else {
+            fs::remove_file(&b).unwrap();
+            fs::create_dir(&b).unwrap();
+        }
+
+        let alone = build_promptly(registry(&[(1, "b", &b_db)]));
+        let s = src(&alone, 1);
+        assert_eq!(s.evidence, SourceEvidence::Unreachable, "{what}");
+        assert_eq!(s.status, SourceStatus::ArchiveMissing, "{what}");
+        let note = s
+            .notes
+            .iter()
+            .find(|n| n.code == LoadCode::SourceUnverified)
+            .expect("the reason is recorded");
+        assert!(
+            note.detail.contains("not a regular file"),
+            "{what}: {}",
+            note.detail
+        );
+        let report = alone.floors(&[], &floor(2)).unwrap();
+        assert_eq!(report.groups[0].verdict, Verdict::Inconclusive, "{what}");
+        assert!(!report.groups[0].only_copy, "{what}");
+        assert_eq!(report.summary.below_floor, 0, "{what}");
+
+        let both = build_promptly(registry(&[(1, "a", &a_db), (2, "b", &b_db)]));
+        let report = both.floors(&[], &floor(2)).unwrap();
+        let g = &report.groups[0];
+        assert_eq!(g.verdict, Verdict::Inconclusive, "{what}");
+        assert!(!g.only_copy, "{what}: made the online copy only-copy");
+        assert_eq!((g.trusted_replicas, g.unknown_sources), (1, 1), "{what}");
+    }
+}
+
 /// Every source currency. `exhaustive` below has no `_` arm, so adding a
 /// variant to `SourceCurrency` stops this test compiling until the new
 /// variant is listed here and its classification asserted.
