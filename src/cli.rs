@@ -55,6 +55,31 @@ pub enum Commands {
     /// Example:
     ///   backupsage inspect DCIM/IMG_0142.JPG -a /backups/photos.tar.zst
     Inspect(InspectArgs),
+
+    /// Compare two indexed snapshots, read-only: added, removed, moved,
+    /// byte-identical, metadata-only and content changes.
+    ///
+    /// Neither index is modified and nothing is re-indexed. Exit 0 when the
+    /// comparison is complete; 2 when an input is unavailable, incomplete or
+    /// incompatible, or any row is inconclusive.
+    ///
+    /// Example:
+    ///   backupsage diff old.tar.zst.db new.tar.zst.db
+    ///   backupsage diff ~/Pictures.db /mnt/backup/Pictures.db --json
+    Diff(DiffArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct DiffArgs {
+    /// The earlier index file.
+    pub before: PathBuf,
+
+    /// The later index file.
+    pub after: PathBuf,
+
+    /// Machine-readable JSON report (version 1).
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -302,6 +327,15 @@ mod tests {
                 assert!(d.json);
                 assert_eq!(d.threshold, 3);
                 assert_eq!(d.min_size, 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        let cli = Cli::parse_from(["backupsage", "diff", "a.db", "b.db", "--json"]);
+        match cli.command {
+            Commands::Diff(d) => {
+                assert_eq!(d.before, PathBuf::from("a.db"));
+                assert_eq!(d.after, PathBuf::from("b.db"));
+                assert!(d.json);
             }
             other => panic!("unexpected: {other:?}"),
         }

@@ -1,0 +1,21 @@
+before: <TMP>/missing.db
+  index unavailable · source currency not_checked
+  index_missing: no index file at this path
+after: <TMP>/after.tar.db
+  index complete · source <TMP>/after.tar (tar) · source currency stat_matches
+  source_stat_matches: size and mtime match the index; the source was not re-hashed
+comparison: unavailable
+
+  inconclusive     added.txt  [other_snapshot_incomplete]
+  inconclusive     content.txt  [other_snapshot_incomplete]
+  inconclusive     dup.txt  [other_snapshot_incomplete]
+  inconclusive     metadata.txt  [other_snapshot_incomplete]
+  inconclusive     new-name.txt  [other_snapshot_incomplete]
+  inconclusive     raw-� [bytes 7261772dfe]  [other_snapshot_incomplete]
+  inconclusive     raw-� [bytes 7261772dff]  [other_snapshot_incomplete]
+  inconclusive     unchanged.txt  [other_snapshot_incomplete]
+
+0 added · 0 removed · 0 moved · 0 byte-identical · 0 metadata-only · 0 content-changed · 8 inconclusive · 0 excluded (shadowed)
+moves: not inferred
+  before: the index is unavailable
+note: this compares the indexed snapshots; it does not re-read either source.

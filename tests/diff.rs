@@ -574,11 +574,16 @@ fn missing_metadata_and_read_errors_do_not_become_equality() {
             4 => after.entries[0].size += 1, // inconsistent hash/size
             _ => after.entries[0].entry_type = EntryType::Symlink,
         }
-        assert_eq!(
-            diff::compare(&before, &after).unwrap().summary.inconclusive,
-            1,
-            "case {case}"
-        );
+        let report = diff::compare(&before, &after).unwrap();
+        assert_eq!(report.summary.inconclusive, 1, "case {case}");
+        let expected = match case {
+            0 | 1 => Reason::MissingMetadataEvidence,
+            // PAX_UNPARSED and READ_ERROR both make the hash untrusted.
+            2 | 3 => Reason::MissingContentEvidence,
+            4 => Reason::InconsistentContentEvidence,
+            _ => Reason::UnsupportedEntryType,
+        };
+        assert_eq!(report.changes[0].reason, expected, "case {case}");
     }
     let mut after = before.clone();
     after.entries[0].flags = flags::FTS_TRUNCATED | flags::DECODE_FAILED | flags::IMAGE_OVER_CAP;

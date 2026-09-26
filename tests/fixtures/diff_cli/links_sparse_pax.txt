@@ -1,0 +1,22 @@
+before: <TMP>/links-before.tar.db
+  index complete · source <TMP>/links-before.tar (tar) · source currency stat_matches
+  source_stat_matches: size and mtime match the index; the source was not re-hashed
+after: <TMP>/links-after.tar.db
+  index complete · source <TMP>/links-after.tar (tar) · source currency stat_matches
+  source_stat_matches: size and mtime match the index; the source was not re-hashed
+comparison: incomplete
+
+  added            alias
+  inconclusive     data/file.bin  [missing_content_evidence]
+  added            renamed-dst.bin
+  removed          renamed-src.bin
+  added            sym
+  added            xattred.txt
+
+4 added · 1 removed · 0 moved · 1 byte-identical · 0 metadata-only · 0 content-changed · 1 inconclusive · 1 excluded (shadowed)
+moves: not inferred
+  after: 1 hardlink row: a hardlink's bytes are not hashed independently
+  after: 1 symlink row: a symlink has no content hash, and any row without one blocks moves
+  after: 1 row with unparsed pax metadata: tar-rs could not read some pax records (legal xattrs or names containing newlines do this too), so the stored hash may not cover the logical file
+  after: 1 unsupported PAX-sparse row: indexed name-only, with no hash
+note: this compares the indexed snapshots; it does not re-read either source.

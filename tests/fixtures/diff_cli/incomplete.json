@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "before": {
+    "index_uuid": "<UUID-BEFORE>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "incomplete",
+    "source_currency": "stat_matches"
+  },
+  "after": {
+    "index_uuid": "<UUID-AFTER>",
+    "schema_version": 3,
+    "hash_algo": "blake3",
+    "state": "complete",
+    "source_currency": "stat_matches"
+  },
+  "comparison_state": "incomplete",
+  "changes": [
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 5,
+        "path": "added.txt",
+        "path_bytes": "61646465642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:02ca7152b28b05997f1b574f7be14b1783700962cdb852636496ab5b5ca40a3b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "content_changed",
+      "reason": "different_content",
+      "before": {
+        "file_id": 3,
+        "path": "content.txt",
+        "path_bytes": "636f6e74656e742e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:3b81dfead5bc554acacaad91802b97c6ad46a30dd4a58521a2fdced2bf90e486",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 3,
+        "path": "content.txt",
+        "path_bytes": "636f6e74656e742e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:c9a85db01bc5e445f9f21710c11d1bc6a1072f2765ccb1e2364d81d0627f130b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 7,
+        "path": "dup.txt",
+        "path_bytes": "6475702e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:1f4880dbbc17196a7c251d81e2ef7f9063e8e3a7be7e0d0a9f71173e88f8d5f4",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 6,
+        "path": "dup.txt",
+        "path_bytes": "6475702e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 11,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:1f4880dbbc17196a7c251d81e2ef7f9063e8e3a7be7e0d0a9f71173e88f8d5f4",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "metadata_only_changed",
+      "reason": "equal_content_different_metadata",
+      "before": {
+        "file_id": 2,
+        "path": "metadata.txt",
+        "path_bytes": "6d657461646174612e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:86f4caddd09ea5c9719018f9eaa0c9c94b9e705f03e1712c05f5639747ae2b07",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 2,
+        "path": "metadata.txt",
+        "path_bytes": "6d657461646174612e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 14,
+        "mtime_unix": 1700000001,
+        "mode": 384,
+        "content_hash": "b3:86f4caddd09ea5c9719018f9eaa0c9c94b9e705f03e1712c05f5639747ae2b07",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "inconclusive",
+      "reason": "other_snapshot_incomplete",
+      "before": null,
+      "after": {
+        "file_id": 4,
+        "path": "new-name.txt",
+        "path_bytes": "6e65772d6e616d652e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 18,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:06553fd33e7c4591f4e78c92358a2257a30c4fbef4e20ae863317fc1ec6da92b",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "removed",
+      "reason": "path_absent",
+      "before": {
+        "file_id": 4,
+        "path": "old-name.txt",
+        "path_bytes": "6f6c642d6e616d652e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 18,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:06553fd33e7c4591f4e78c92358a2257a30c4fbef4e20ae863317fc1ec6da92b",
+        "flags": 0
+      },
+      "after": null
+    },
+    {
+      "kind": "content_changed",
+      "reason": "different_content",
+      "before": {
+        "file_id": 9,
+        "path": "raw-�",
+        "path_bytes": "7261772dfe",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 8,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:5fd11c3074e98c28269f24e96924226c6ed18aa031d43cfe45aaedbe849d2b09",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 8,
+        "path": "raw-�",
+        "path_bytes": "7261772dfe",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:20010b7afaf2a89bdaba803f1cec37f6fd730136fb8e0b94d4dce07a05438dbb",
+        "flags": 0
+      }
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 8,
+        "path": "raw-�",
+        "path_bytes": "7261772dff",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 8,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:c35666d154baac27a5ab51d49ba9bea14ffde4778de33ba5713328d8a633ff1f",
+        "flags": 16
+      },
+      "after": {
+        "file_id": 7,
+        "path": "raw-�",
+        "path_bytes": "7261772dff",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 8,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:c35666d154baac27a5ab51d49ba9bea14ffde4778de33ba5713328d8a633ff1f",
+        "flags": 16
+      }
+    },
+    {
+      "kind": "removed",
+      "reason": "path_absent",
+      "before": {
+        "file_id": 5,
+        "path": "removed.txt",
+        "path_bytes": "72656d6f7665642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:0795740fd82823c09e54ed0019566ec28ba8a2e6e9274c36513a276260f22a51",
+        "flags": 0
+      },
+      "after": null
+    },
+    {
+      "kind": "byte_identical",
+      "reason": "equal_content_and_metadata",
+      "before": {
+        "file_id": 1,
+        "path": "unchanged.txt",
+        "path_bytes": "756e6368616e6765642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:9b3a7844b08ff425691a46ae4bf0e5ac77c23329f0ea4a4a69349189ca4ef0ca",
+        "flags": 0
+      },
+      "after": {
+        "file_id": 1,
+        "path": "unchanged.txt",
+        "path_bytes": "756e6368616e6765642e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:9b3a7844b08ff425691a46ae4bf0e5ac77c23329f0ea4a4a69349189ca4ef0ca",
+        "flags": 0
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "side": "before",
+      "reason": "shadowed_path",
+      "entry": {
+        "file_id": 6,
+        "path": "dup.txt",
+        "path_bytes": "6475702e747874",
+        "entry_type": "file",
+        "link_target_bytes": null,
+        "size": 10,
+        "mtime_unix": 1700000001,
+        "mode": 420,
+        "content_hash": "b3:d7dca9d323a4a904af847d3901eb89c26619efb53ec06fbbcf3f0942255f0d9b",
+        "flags": 16
+      }
+    }
+  ],
+  "summary": {
+    "added": 0,
+    "removed": 2,
+    "moved": 0,
+    "byte_identical": 3,
+    "metadata_only_changed": 1,
+    "content_changed": 2,
+    "inconclusive": 2,
+    "excluded": 1
+  },
+  "inputs": {
+    "before": {
+      "db_path": "<TMP>/partial.db",
+      "db_path_bytes": "<TMP-HEX>2f7061727469616c2e6462",
+      "source": "<TMP>/before.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 9,
+      "notes": [
+        {
+          "code": "index_incomplete",
+          "detail": "indexing stopped before it finished; rows seen are real, more may exist"
+        },
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ]
+    },
+    "after": {
+      "db_path": "<TMP>/after.tar.db",
+      "db_path_bytes": "<TMP-HEX>2f61667465722e7461722e6462",
+      "source": "<TMP>/after.tar",
+      "source_type": "tar",
+      "content_mode": "full",
+      "rows": 8,
+      "notes": [
+        {
+          "code": "source_stat_matches",
+          "detail": "size and mtime match the index; the source was not re-hashed"
+        }
+      ]
+    }
+  },
+  "move_inference": {
+    "enabled": false,
+    "blockers": [
+      {
+        "side": "before",
+        "cause": "snapshot_incomplete",
+        "rows": null
+      }
+    ]
+  }
+}
