@@ -630,3 +630,169 @@ fn display_path_is_lossy_but_raw_bytes_are_kept() {
     assert_eq!(r.display_path(), "x\u{fffd}");
     assert_eq!(r.path_raw, vec![b'x', 0xff]);
 }
+
+// ── Full-hash keys, ordering of every list, and boundaries ──────────────────
+
+#[test]
+fn hashes_differing_only_in_the_last_byte_form_separate_groups() {
+    let mut last_byte = h(1);
+    last_byte[31] = 2;
+    let mut near_twin = file(1, "b", 1, 5);
+    near_twin.content_hash = Some(last_byte);
+    let cov = run(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        complete(2, vec![near_twin]),
+    ]);
+
+    let keys: Vec<[u8; 32]> = cov.groups.iter().map(|g| g.content_hash).collect();
+    assert_eq!(keys, vec![h(1), last_byte]);
+    assert_eq!(cov.groups[0].copies, vec![rref(1, "a", 1)]);
+    assert_eq!(cov.groups[1].copies, vec![rref(2, "b", 1)]);
+    for g in &cov.groups {
+        assert_eq!(g.replicas, ReplicaCount::Exact(1));
+    }
+}
+
+/// Several aliases and unknown rows per source, deliberately out of order.
+fn aliases_and_unknowns() -> Vec<CoverageSource> {
+    vec![
+        complete(
+            1,
+            vec![
+                file(1, "f", 1, 5),
+                link(2, "l3", EntryKind::Hardlink, Some(1)),
+                link(3, "l1", EntryKind::Hardlink, Some(1)),
+                link(4, "l2", EntryKind::Hardlink, Some(1)),
+                unhashed(5, "u3", 9, 0),
+                unhashed(6, "u1", 9, flags::READ_ERROR),
+                unhashed(7, "u2", 9, 0),
+            ],
+        ),
+        complete(
+            2,
+            vec![
+                unhashed(1, "v2", 9, 0),
+                unhashed(2, "v1", 9, 0),
+                file(3, "g", 1, 5),
+                link(4, "m2", EntryKind::Hardlink, Some(1)),
+                link(5, "m1", EntryKind::Hardlink, Some(1)),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn aliases_and_unknown_content_are_ordered_whatever_the_input_order() {
+    let cov = run(&aliases_and_unknowns());
+
+    let aliases = &find(&cov, 1).aliases;
+    assert_eq!(
+        *aliases,
+        vec![
+            rref(1, "l1", 3),
+            rref(1, "l2", 4),
+            rref(1, "l3", 2),
+            rref(2, "m1", 5),
+            rref(2, "m2", 4),
+        ]
+    );
+    let unknown: Vec<RowRef> = cov.unknown_content.iter().map(|u| u.row.clone()).collect();
+    assert_eq!(
+        unknown,
+        vec![
+            rref(1, "u1", 6),
+            rref(1, "u2", 7),
+            rref(1, "u3", 5),
+            rref(2, "v1", 2),
+            rref(2, "v2", 1),
+        ]
+    );
+
+    let expected = format!("{cov:?}");
+    for shift in 0..7 {
+        for reverse in [false, true] {
+            let mut sources = aliases_and_unknowns();
+            for s in &mut sources {
+                let n = s.rows.len();
+                s.rows.rotate_left(shift % n);
+                if reverse {
+                    s.rows.reverse();
+                }
+            }
+            if reverse {
+                sources.reverse();
+            }
+            assert_eq!(format!("{:?}", run(&sources)), expected);
+        }
+    }
+}
+
+#[test]
+fn hardlink_that_wins_a_shadow_hides_the_earlier_file() {
+    // The latest row at "p" is a hardlink: the earlier regular file there is
+    // shadowed, and the link alone neither forms a group nor counts.
+    let cov = run(&[complete(
+        1,
+        vec![
+            file(1, "p", 1, 5),
+            link(2, "p", EntryKind::Hardlink, Some(1)),
+        ],
+    )]);
+    assert!(cov.groups.is_empty());
+    let exclusions: Vec<_> = cov
+        .exclusions
+        .iter()
+        .map(|e| (e.row.clone(), e.reason))
+        .collect();
+    assert_eq!(
+        exclusions,
+        vec![
+            (rref(1, "p", 1), ExclusionReason::Shadowed),
+            (rref(1, "p", 2), ExclusionReason::UnmatchedHardlink),
+        ]
+    );
+
+    // With another effective copy in the same source, the winning link is an
+    // alias of it, and the shadowed file still never counts.
+    let cov = run(&[complete(
+        1,
+        vec![
+            file(1, "p", 1, 5),
+            link(2, "p", EntryKind::Hardlink, Some(1)),
+            file(3, "q", 1, 5),
+        ],
+    )]);
+    let g = find(&cov, 1);
+    assert_eq!(g.copies, vec![rref(1, "q", 3)]);
+    assert_eq!(g.aliases, vec![rref(1, "p", 2)]);
+    assert_eq!(presence(&cov, 1, 1), Presence::Present { copies: 1 });
+    assert_eq!(cov.exclusions.len(), 1);
+    assert_eq!(cov.exclusions[0].row, rref(1, "p", 1));
+    assert_eq!(cov.exclusions[0].reason, ExclusionReason::Shadowed);
+}
+
+#[test]
+fn zero_size_rows_match_empty_content_and_rule_out_everything_else() {
+    let cov = run(&[
+        complete(1, vec![file(1, "empty-a", 0, 0), file(2, "a", 1, 5)]),
+        complete(2, vec![file(1, "empty-b", 0, 0)]),
+        complete(3, vec![unhashed(1, "zero", 0, 0)]),
+    ]);
+
+    // Matching: empty content groups across sources, and a zero-size
+    // unhashed row could be it.
+    let empty = find(&cov, 0);
+    assert_eq!(empty.size, Some(0));
+    assert_eq!(presence(&cov, 0, 1), Presence::Present { copies: 1 });
+    assert_eq!(presence(&cov, 0, 2), Presence::Present { copies: 1 });
+    assert_eq!(
+        presence(&cov, 0, 3),
+        Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows: 1 })
+    );
+    assert_eq!(empty.replicas, ReplicaCount::AtLeast(2));
+
+    // Non-matching: a trusted zero size rules the row out for 5-byte content.
+    assert_eq!(presence(&cov, 1, 2), Presence::Absent);
+    assert_eq!(presence(&cov, 1, 3), Presence::Absent);
+    assert_eq!(find(&cov, 1).replicas, ReplicaCount::Exact(1));
+}
