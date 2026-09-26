@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags};
 
 use crate::searcher;
 use crate::store;
@@ -315,7 +315,10 @@ struct SourceIdentity {
     content_mode: crate::indexer::ContentMode,
 }
 
-fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
+/// The returned handle holds the index's read transaction: while the caller
+/// keeps it, a writer cannot commit, so the rows it then replicates belong
+/// to the same snapshot as this identity (#102).
+fn read_identity(db_path: &Path) -> Result<(crate::index_read::LockedIndex, SourceIdentity)> {
     let conn = searcher::open_index(db_path)?;
     let version = store::schema_version(&conn).unwrap_or(1);
     if version < 2 {
@@ -351,23 +354,27 @@ fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
         phash_algo: searcher::get_meta(&conn, "phash_algo"),
         content_mode: store::content_mode(&conn),
     };
+    crate::index_read::run_mid_read_hook(crate::index_read::ReadPoint::HeldByCaller);
     Ok((conn, id))
 }
 
 /// Accepts either a `.db` index or the source itself (resolves `<source>.db`).
+/// An SQLite file is probed through the locked loader (#102), so nothing is
+/// written beside it; only a file that is not a BackupSage index falls
+/// through to the sibling lookup, and any other refusal says why.
 fn resolve_db_arg(arg: &Path) -> Result<PathBuf> {
-    if arg.is_file() {
-        if let Ok(conn) = Connection::open_with_flags(arg, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-            let is_index: bool = conn
-                .query_row(
-                    "SELECT 1 FROM sqlite_master WHERE name='files_fts'",
-                    [],
-                    |_| Ok(()),
-                )
-                .is_ok();
-            if is_index {
-                return Ok(arg.to_path_buf());
-            }
+    let is_sqlite = arg.is_file() && {
+        let mut head = [0u8; 16];
+        fs::File::open(arg)
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+            .is_ok()
+            && &head == b"SQLite format 3\0"
+    };
+    if is_sqlite {
+        match crate::index_read::LockedIndex::open(arg) {
+            Ok(_probe) => return Ok(arg.to_path_buf()),
+            Err(note) if note.code == crate::index_read::NoteCode::NotABackupsageIndex => {}
+            Err(note) => bail!("cannot read index '{}' safely — {note}", arg.display()),
         }
     }
     let sibling = crate::indexer::resolve_db_path(arg, None);
@@ -383,6 +390,12 @@ fn resolve_db_arg(arg: &Path) -> Result<PathBuf> {
 
 impl Master {
     /// Register (or refresh) a per-source index and replicate its metadata.
+    ///
+    /// The catalog row and the replicated rows commit together, and only
+    /// once the source read is proven coherent (#102). Identity and rows are
+    /// read through one locked connection, one read transaction on one inode;
+    /// the path is never reopened, so a file renamed over it mid-way cannot
+    /// lend its rows to the other file's identity.
     pub fn add(&mut self, db_or_source: &Path) -> Result<AddOutcome> {
         let db_path = resolve_db_arg(db_or_source)?;
         let db_abs = db_path
@@ -390,13 +403,45 @@ impl Master {
             .unwrap_or_else(|_| db_path.clone())
             .display()
             .to_string();
-        let (_src_conn, id) = read_identity(&db_path)?;
+        let (src, id) = read_identity(&db_path)?;
         let label = Path::new(&id.source_path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| db_abs.clone());
         let (db_size, db_mtime) = stat_file(&db_path);
 
+        self.conn.execute_batch("BEGIN")?;
+        let registered = self
+            .register_tx(&src, &id, &db_abs, &label, db_size, db_mtime)
+            .and_then(|outcome| {
+                searcher::finish_index(src, &db_path)
+                    .context("registration abandoned, nothing was recorded")?;
+                Ok(outcome)
+            });
+        match registered {
+            Ok(outcome) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(outcome)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    /// The body of [`Self::add`], inside its master transaction.
+    fn register_tx(
+        &mut self,
+        src: &Connection,
+        id: &SourceIdentity,
+        db_abs: &str,
+        label: &str,
+        db_size: Option<i64>,
+        db_mtime: Option<i64>,
+    ) -> Result<AddOutcome> {
+        let label = label.to_owned();
+        let db_abs = db_abs.to_owned();
         // Identity resolution: same uuid = moved/unchanged index; same
         // db_path = rebuilt index (new uuid). Either way update in place.
         let existing: Option<i64> = self
@@ -490,61 +535,50 @@ impl Master {
             return Ok(AddOutcome::V2Limited { label });
         }
 
-        let files = self.replicate(archive_id, &db_abs)?;
+        let files = self.replicate_from(src, archive_id)?;
         Ok(AddOutcome::Replicated { label, files })
     }
 
-    /// One-ATTACH-at-a-time metadata replication (never near the limit).
-    fn replicate(&mut self, archive_id: i64, db_path: &str) -> Result<u64> {
-        self.conn
-            .execute(
-                "ATTACH DATABASE ?1 AS src",
-                [format!("file:{db_path}?mode=ro")],
-            )
-            .with_context(|| format!("cannot attach '{db_path}'"))?;
-        let tx_result = self.replicate_tx(archive_id);
-        if tx_result.is_err() {
-            let _ = self.conn.execute_batch("ROLLBACK");
-        }
-        let _ = self.conn.execute_batch("DETACH DATABASE src");
-        tx_result
-    }
-
-    /// The transactional body of [`Self::replicate`]; assumes `src` is
-    /// attached. Split out so rollback/detach cleanup stays in one place.
-    fn replicate_tx(&mut self, archive_id: i64) -> Result<u64> {
+    /// Copy the source's rows through its own locked connection, so they
+    /// come from the snapshot the identity was read from. Values pass through
+    /// untouched, as `INSERT … SELECT` did.
+    fn replicate_from(&mut self, src: &Connection, archive_id: i64) -> Result<u64> {
+        crate::index_read::run_mid_read_hook(crate::index_read::ReadPoint::BeforeReplication);
         // Older per-source indexes have no path_raw column; replicate NULL.
-        let src_raw = if self
-            .conn
-            .prepare("SELECT 1 FROM src.pragma_table_xinfo('files') WHERE name = 'path_raw'")
-            .and_then(|mut s| s.query_row([], |_| Ok(())).optional())
-            .ok()
-            .flatten()
-            .is_some()
-        {
+        let raw_col = if searcher::has_column(src, "files", "path_raw") {
             "path_raw"
         } else {
             "NULL"
         };
-        self.conn.execute_batch("BEGIN")?;
         self.conn
             .execute("DELETE FROM files WHERE archive_id=?1", [archive_id])?;
-        let n = self.conn.execute(
-            &format!(
-                "INSERT INTO files (archive_id, file_id, path, path_raw, entry_type, kind,
-                    size, mtime_unix, exif_unix, exif_src, content_hash, phash, img_w,
-                    img_h, flags)
-                 SELECT ?1, id, path, {src_raw}, entry_type, kind, size, mtime_unix,
-                    exif_unix, exif_src, content_hash, phash, img_w, img_h, flags
-                 FROM src.files"
-            ),
-            [archive_id],
-        )? as u64;
+        crate::index_read::run_mid_read_hook(crate::index_read::ReadPoint::DuringReplication);
+        let mut read = src.prepare(&format!(
+            "SELECT id, path, {raw_col}, entry_type, kind, size, mtime_unix, exif_unix,
+                    exif_src, content_hash, phash, img_w, img_h, flags
+             FROM files"
+        ))?;
+        let mut insert = self.conn.prepare(
+            "INSERT INTO files (archive_id, file_id, path, path_raw, entry_type, kind,
+                size, mtime_unix, exif_unix, exif_src, content_hash, phash, img_w,
+                img_h, flags)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+        )?;
+        let mut rows = read.query([])?;
+        let mut n = 0u64;
+        while let Some(row) = rows.next()? {
+            let mut values = vec![rusqlite::types::Value::Integer(archive_id)];
+            for i in 0..14 {
+                values.push(row.get::<_, rusqlite::types::Value>(i)?);
+            }
+            insert.execute(rusqlite::params_from_iter(values))?;
+            n += 1;
+        }
+        drop(insert);
         self.conn.execute(
             "UPDATE archives SET files_count=?1, synced_unix=?2 WHERE archive_id=?3",
             params![n as i64, now_unix(), archive_id],
         )?;
-        self.conn.execute_batch("COMMIT")?;
         Ok(n)
     }
 

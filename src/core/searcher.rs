@@ -7,8 +7,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use anyhow::{anyhow, bail, Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::index_read::{InputNote, LockedIndex, NoteCode};
 
 pub struct SearchHit {
     pub path: String,
@@ -38,32 +40,39 @@ pub struct WordRow {
 
 // ── Opening an index ─────────────────────────────────────────────────────────
 
-/// Open an index read-only, verifying it is actually a BackupSage database.
-pub fn open_index(db_path: &Path) -> Result<Connection> {
-    if !db_path.exists() {
-        bail!(
-            "index not found at '{}' — run `backupsage index <archive>` first",
-            db_path.display()
-        );
-    }
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("cannot open index at '{}'", db_path.display()))?;
-    if !is_backupsage_db(&conn) {
-        bail!(
-            "'{}' is not a BackupSage index (no files_fts table)",
-            db_path.display()
-        );
-    }
-    Ok(conn)
+/// Open an index through the shared locked loader (#102): read-only, inside
+/// one read transaction, refusing any layout SQLite could only read by
+/// writing beside it. Present results only after [`finish_index`] succeeds.
+pub fn open_index(db_path: &Path) -> Result<LockedIndex> {
+    LockedIndex::open(db_path).map_err(|note| open_error(db_path, &note))
 }
 
-fn is_backupsage_db(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE name = 'files_fts'",
-        [],
-        |_| Ok(()),
-    )
-    .is_ok()
+/// The CLI wording for a refused open. The missing and not-an-index cases
+/// keep their v1.0 messages; the contract fixtures pin the first.
+fn open_error(db_path: &Path, note: &InputNote) -> anyhow::Error {
+    match note.code {
+        NoteCode::IndexMissing => anyhow!(
+            "index not found at '{}' — run `backupsage index <archive>` first",
+            db_path.display()
+        ),
+        NoteCode::NotABackupsageIndex => anyhow!(
+            "'{}' is not a BackupSage index ({})",
+            db_path.display(),
+            note.detail
+        ),
+        _ => anyhow!("cannot read index '{}' safely — {note}", db_path.display()),
+    }
+}
+
+/// End a read begun by [`open_index`] and prove it coherent; a failure
+/// means results read from it must not be shown.
+pub fn finish_index(conn: LockedIndex, db_path: &Path) -> Result<()> {
+    conn.finish().map_err(|note| {
+        anyhow!(
+            "index '{}' could not be read coherently — {note}; results discarded",
+            db_path.display()
+        )
+    })
 }
 
 /// Read a key from the meta table. Returns None for keys that don't exist —
@@ -262,24 +271,49 @@ pub fn search_all(
         skipped: Vec::new(),
     };
     for row in master.list()? {
-        let conn = match open_index(Path::new(&row.db_path)) {
+        let db_path = Path::new(&row.db_path);
+        let conn = match LockedIndex::open(db_path) {
             Ok(c) => c,
-            Err(e) => {
+            // A missing file keeps its v1.0 wording; any other refusal is
+            // listed with its named reason, never silently dropped.
+            Err(note) if note.code == NoteCode::IndexMissing => {
+                let e = open_error(db_path, &note);
                 out.skipped
                     .push((row.label.clone(), format!("unreachable: {e:#}")));
                 continue;
             }
+            Err(note) => {
+                out.skipped
+                    .push((row.label.clone(), format!("refused: {note}")));
+                continue;
+            }
         };
-        if index_completed(&conn) == Some(false) {
+        let incomplete = index_completed(&conn) == Some(false);
+        let mode = crate::store::content_mode(&conn);
+        // Metadata-only archives have no content to match (#39).
+        let outcome = if mode == crate::indexer::ContentMode::MetadataOnly {
+            None
+        } else {
+            Some(
+                search(&conn, query, limit_per_archive, snippets)
+                    .with_context(|| format!("search failed in '{}'", row.label))?,
+            )
+        };
+        // Nothing read above counts, notes included, unless the read was
+        // coherent: an archive changed mid-read is refused, not described.
+        if let Err(note) = conn.finish() {
+            out.skipped
+                .push((row.label.clone(), format!("refused: {note}")));
+            continue;
+        }
+        if incomplete {
             out.skipped.push((
                 row.label.clone(),
                 "incomplete index — results may be partial".into(),
             ));
         }
-        // Metadata-only archives have no content to match — skip with a
-        // worded reason (exit-2 semantics) instead of erroring out (#39).
-        let mode = crate::store::content_mode(&conn);
-        if mode == crate::indexer::ContentMode::MetadataOnly {
+        let Some(outcome) = outcome else {
+            // Skipped with a worded reason (exit-2 semantics), not an error.
             out.skipped.push((
                 row.label.clone(),
                 "metadata-only — content search unsupported; re-index with \
@@ -287,9 +321,7 @@ pub fn search_all(
                     .into(),
             ));
             continue;
-        }
-        let outcome = search(&conn, query, limit_per_archive, snippets)
-            .with_context(|| format!("search failed in '{}'", row.label))?;
+        };
         if !outcome.hits.is_empty() {
             out.per_archive.push(FederatedHit {
                 archive_label: row.label.clone(),
@@ -346,6 +378,7 @@ pub fn discover_db_path_with_control(
         return Ok(legacy);
     }
 
+    let mut refused: Vec<String> = Vec::new();
     // Last resort: any *.db in the current directory that actually is a
     // BackupSage index (v0.1 grabbed the first *.db file of any kind and
     // failed later with "file is not a database").
@@ -358,15 +391,25 @@ pub fn discover_db_path_with_control(
         candidates.sort();
         for p in candidates {
             control.check_cancelled()?;
-            let ok = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map(|c| is_backupsage_db(&c))
-                .unwrap_or(false);
-            if ok {
-                control.emit(crate::progress::ProgressEvent::IndexDiscovered { path: &p });
-                return Ok(p);
+            // The locked loader checks it is a BackupSage index without
+            // writing beside it. A refused candidate is not adopted, but its
+            // reason is kept for the error below.
+            match LockedIndex::open(&p) {
+                Ok(_) => {
+                    control.emit(crate::progress::ProgressEvent::IndexDiscovered { path: &p });
+                    return Ok(p);
+                }
+                Err(note) if note.code == NoteCode::NotABackupsageIndex => {}
+                Err(note) => refused.push(format!("'{}' ({note})", p.display())),
             }
         }
     }
 
+    if !refused.is_empty() {
+        bail!(
+            "no readable index found — refused: {}; pass --index <path> to name one",
+            refused.join("; ")
+        );
+    }
     bail!("no index found — run `backupsage index <archive>` first, or pass --index <path>")
 }
