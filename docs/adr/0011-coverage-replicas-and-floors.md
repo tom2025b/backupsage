@@ -39,7 +39,9 @@ the replica count a lower bound (`AtLeast`).
 4. `only_copy` marks exactly one trusted replica with no unknown presence. It
    is independent of the verdict, so it also appears when a floor of 1 is met.
 5. Content of a known length that is empty, or smaller than `min_size`, is out
-   of scope. It is listed with its copies and a reason, never silently dropped.
+   of scope. It is listed with a reason and its copies, never silently
+   dropped; those copies carry the same label, status, counts and protected
+   marks as in-scope copies.
    An unknown length is never excluded by size. Hardlink aliases are listed
    with their group, in scope or not. Unknown-content rows keep their path,
    size and reason, and engine row exclusions (shadowed, symlink, unmatched
@@ -55,7 +57,10 @@ the replica count a lower bound (`AtLeast`).
    replicas on protected sources, also included in `trusted_replicas`), and
    the summary totals them. Rule 2 is unchanged: a protected source whose
    status is `stale-index`, `db-missing` or `archive-missing` is shown and
-   marked but not counted.
+   marked but not counted. The designation survives every path: copies of
+   out-of-scope content are marked too, and the report lists every source
+   with its label, status and protected designation, even when it holds no
+   copies. Out-of-scope content never enters the protected totals.
 
 ## Open decisions
 

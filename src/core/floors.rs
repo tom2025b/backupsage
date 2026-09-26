@@ -200,6 +200,19 @@ pub fn evaluate(
         }
     }
 
+    // One builder for every copy, in scope or not, so no path can lose a
+    // copy's status or protected designation.
+    let floor_copy = |row: &RowRef| {
+        let status = status_of[&row.source_id];
+        FloorCopy {
+            row: row.clone(),
+            source_label: labels[&row.source_id].to_owned(),
+            status,
+            counts_toward_floor: status.counts_toward_floor(),
+            protected: protected_ids.contains(&row.source_id),
+        }
+    };
+
     let mut groups = Vec::new();
     let mut excluded_groups = Vec::new();
     for group in &coverage.groups {
@@ -214,17 +227,7 @@ pub fn evaluate(
                 content_hash: group.content_hash,
                 size: group.size,
                 reason,
-                copies: group
-                    .copies
-                    .iter()
-                    .map(|row| FloorCopy {
-                        row: row.clone(),
-                        source_label: labels[&row.source_id].to_owned(),
-                        status: status_of[&row.source_id],
-                        counts_toward_floor: status_of[&row.source_id].counts_toward_floor(),
-                        protected: false,
-                    })
-                    .collect(),
+                copies: group.copies.iter().map(floor_copy).collect(),
                 aliases: group.aliases.clone(),
             });
             continue;
@@ -257,20 +260,7 @@ pub fn evaluate(
             Verdict::BelowFloor
         };
         // The engine emits copies sorted; mapping them in place keeps that.
-        let copies: Vec<FloorCopy> = group
-            .copies
-            .iter()
-            .map(|row| {
-                let status = status_of[&row.source_id];
-                FloorCopy {
-                    row: row.clone(),
-                    source_label: labels[&row.source_id].to_owned(),
-                    status,
-                    counts_toward_floor: status.counts_toward_floor(),
-                    protected: protected_ids.contains(&row.source_id),
-                }
-            })
-            .collect();
+        let copies: Vec<FloorCopy> = group.copies.iter().map(floor_copy).collect();
         groups.push(GroupFloor {
             content_hash: group.content_hash,
             size: group.size,
@@ -314,7 +304,16 @@ pub fn evaluate(
         unknown_content_rows: unknown_content.len(),
     };
     Ok(FloorReport {
-        sources: Vec::new(),
+        sources: labels
+            .iter()
+            .map(|(&id, &label)| FloorSource {
+                source_id: id,
+                label: label.to_owned(),
+                status: status_of[&id],
+                counts_toward_floor: status_of[&id].counts_toward_floor(),
+                protected: protected_ids.contains(&id),
+            })
+            .collect(),
         groups,
         excluded_groups,
         excluded_rows: coverage.exclusions.clone(),
