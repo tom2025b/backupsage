@@ -14,6 +14,7 @@ pub mod diff_input;
 pub mod exif_date;
 pub mod floors;
 pub mod format;
+pub mod index_read;
 pub mod indexer;
 pub mod master;
 pub mod outpath;

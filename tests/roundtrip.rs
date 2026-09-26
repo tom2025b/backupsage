@@ -75,7 +75,7 @@ fn gzip_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 /// Index `archive`, return an open read-only connection to the result.
-fn index_and_open(archive: &Path, opts: &IndexOptions) -> rusqlite::Connection {
+fn index_and_open(archive: &Path, opts: &IndexOptions) -> backupsage::index_read::LockedIndex {
     let summary = indexer::run_index(archive, None, opts).unwrap();
     searcher::open_index(&summary.db_path).unwrap()
 }

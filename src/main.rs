@@ -132,6 +132,8 @@ fn run() -> Result<i32> {
                 eprintln!("note: search-only index — snippets are unavailable (no stored text)");
             }
             let outcome = searcher::search(&conn, &args.keyword, args.limit, args.snippets)?;
+            // Results are shown only from a read proven coherent (#102).
+            searcher::finish_index(conn, &db_path)?;
             if outcome.literal_fallback {
                 eprintln!(
                     "note: '{}' is not valid FTS5 syntax — searched for it as a literal phrase",
@@ -175,20 +177,26 @@ fn run() -> Result<i32> {
             let conn = searcher::open_index(&db_path)?;
             warn_if_incomplete(&conn);
 
-            match backupsage::store::content_mode(&conn) {
-                indexer::ContentMode::Full => {}
-                m => {
-                    println!(
-                        "this index is {} — word statistics are not stored; \
-                         re-index with --mode full to use `top`.",
-                        m.as_str()
-                    );
-                    return Ok(0);
-                }
+            let mode = backupsage::store::content_mode(&conn);
+            let (rows, no_word_stats) = if mode == indexer::ContentMode::Full {
+                let rows = searcher::top_words(&conn, args.limit)?;
+                let off = searcher::get_meta(&conn, "word_stats").as_deref() == Some("0");
+                (rows, off)
+            } else {
+                (Vec::new(), false)
+            };
+            // Nothing read is shown unless the read was coherent (#102).
+            searcher::finish_index(conn, &db_path)?;
+            if mode != indexer::ContentMode::Full {
+                println!(
+                    "this index is {} — word statistics are not stored; \
+                     re-index with --mode full to use `top`.",
+                    mode.as_str()
+                );
+                return Ok(0);
             }
-            let rows = searcher::top_words(&conn, args.limit)?;
             if rows.is_empty() {
-                if searcher::get_meta(&conn, "word_stats").as_deref() == Some("0") {
+                if no_word_stats {
                     println!("This index was built with --no-word-stats; re-index to use `top`.");
                 } else {
                     println!("No words found in the index. Has indexing completed?");
@@ -272,7 +280,11 @@ fn run() -> Result<i32> {
                 &control,
             )?;
             let conn = searcher::open_index(&db_path)?;
-            inspect_path(&conn, &db_path, &args.path)
+            let rendered = inspect_path(&conn, &db_path, &args.path)?;
+            // Shown only from a read proven coherent (#102).
+            searcher::finish_index(conn, &db_path)?;
+            print!("{rendered}");
+            Ok(0)
         }
 
         Commands::Diff(args) => {
@@ -408,7 +420,15 @@ fn run_master(sub: MasterCommands, master_path: &std::path::Path) -> Result<i32>
     }
 }
 
-fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &str) -> Result<i32> {
+/// Render every indexed detail for `path`; the caller prints it once the
+/// read is proven coherent.
+fn inspect_path(
+    conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
+    path: &str,
+) -> Result<String> {
+    use std::fmt::Write;
+    let mut out = String::new();
     let mut stmt = conn.prepare(
         "SELECT id, entry_type, kind, size, mtime_unix, mode, content_hash, img_w, img_h,
                 phash, exif_unix, exif_src, flags, link_target
@@ -459,47 +479,55 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
         bail!("no entry '{path}' in {}", db_path.display());
     }
 
-    println!("Index    : {}", db_path.display());
-    println!(
+    let _ = writeln!(out, "Index    : {}", db_path.display());
+    let _ = writeln!(
+        out,
         "Source   : {}",
         sanitize(&searcher::get_meta(conn, "source").unwrap_or_default())
     );
-    println!("Path     : {}", sanitize(path));
+    let _ = writeln!(out, "Path     : {}", sanitize(path));
     for (i, row) in rows.iter().enumerate() {
         let (id, etype, kind, size, mtime, mode, hash, w, h, phash, exif, exif_src, fl, target) =
             row;
         if rows.len() > 1 {
-            println!("── entry {} of {} (id {id}) ──", i + 1, rows.len());
+            let _ = writeln!(out, "── entry {} of {} (id {id}) ──", i + 1, rows.len());
         }
-        println!("Type     : {} ({})", sanitize(etype), sanitize(kind));
-        println!("Size     : {} ({size} bytes)", human_bytes(*size as u64));
+        let _ = writeln!(out, "Type     : {} ({})", sanitize(etype), sanitize(kind));
+        let _ = writeln!(
+            out,
+            "Size     : {} ({size} bytes)",
+            human_bytes(*size as u64)
+        );
         if let Some(m) = mtime {
-            println!("Mtime    : {} (tar header / fs)", fmt_unix(*m));
+            let _ = writeln!(out, "Mtime    : {} (tar header / fs)", fmt_unix(*m));
         }
         if let Some(m) = mode {
-            println!("Mode     : {m:o}");
+            let _ = writeln!(out, "Mode     : {m:o}");
         }
         if let Some(t) = target {
-            println!("Target   : {}", sanitize(t));
+            let _ = writeln!(out, "Target   : {}", sanitize(t));
         }
         if let Some(hh) = hash {
-            println!(
+            let _ = writeln!(
+                out,
                 "BLAKE3   : {}",
                 hh.iter().map(|b| format!("{b:02x}")).collect::<String>()
             );
         }
         if let (Some(w), Some(h)) = (w, h) {
-            println!("Pixels   : {w}x{h}");
+            let _ = writeln!(out, "Pixels   : {w}x{h}");
         }
         if let Some(p) = phash {
-            println!(
+            let _ = writeln!(
+                out,
                 "pHash    : {:016x} ({})",
                 *p as u64,
                 searcher::get_meta(conn, "phash_algo").unwrap_or_default()
             );
         }
         if let Some(e) = exif {
-            println!(
+            let _ = writeln!(
+                out,
                 "EXIF     : {} ({})",
                 fmt_unix(*e),
                 sanitize(exif_src.as_deref().unwrap_or("unknown field"))
@@ -520,10 +548,10 @@ fn inspect_path(conn: &rusqlite::Connection, db_path: &std::path::Path, path: &s
             }
         }
         if !markers.is_empty() {
-            println!("Flags    : {}", markers.join(", "));
+            let _ = writeln!(out, "Flags    : {}", markers.join(", "));
         }
     }
-    Ok(0)
+    Ok(out)
 }
 
 fn warn_if_incomplete(conn: &rusqlite::Connection) {

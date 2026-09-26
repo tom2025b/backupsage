@@ -254,6 +254,85 @@ is in this change's pull request. Among them:
   overwrites the file in place mid-read.
 - **Hard links:** `hardlinked_index_is_unavailable_because_its_journal_may_hide_elsewhere`.
 
+**Signed:** max-cloud (Claude) · 2026-09-26T13:52:04-04:00
+
+## Addendum (#102): one locked loader for every command
+
+Date: 2026-09-26 · Status: accepted · Issue: #102
+
+The #93 loader now lives in `index_read`, as `LockedIndex`, and every index
+read uses it: `search`, `top`, `inspect`, federated `search --all`, master
+registration (`read_identity`) and the re-index replace check
+(`assert_replaceable_index`). `diff_input` re-exports `open_index_readonly`,
+`InputNote`, `NoteCode`, `ReadPoint` and `set_mid_read_hook` under their #93
+names, and `load_index` is unchanged. `searcher::open_index` now returns the
+`LockedIndex` handle, which dereferences to the connection.
+
+Each caller must follow the same rules:
+- **Read under one transaction.** The handle holds a read transaction from
+  `LockedIndex::open` until `finish` or drop.
+- **Show results only after a clean `finish`.** `finish` (or
+  `searcher::finish_index`) must succeed first: no new sidecar, and an
+  unchanged file stamp.
+  - `search`, `top` and `inspect` finish before printing. `inspect` renders
+    into a string first.
+  - Federated search drops an archive whose read was not coherent.
+- **Refused layouts fail closed with their reason.**
+  - `search`, `top` and `inspect` exit 1 with `cannot read index '…' safely —
+    <code>: <detail>`. The missing-index and not-an-index messages keep their
+    v1.0 wording, which the contract fixtures pin.
+  - Federated search lists each refused archive in `skipped` as
+    `refused: <code>: <detail>`. A missing file stays `unreachable: …`.
+- **Master registration records one snapshot or nothing.**
+  - `resolve_db_arg` probes an SQLite argument through the loader, so
+    `master add` and `dedup --db` never write beside an index. Only a
+    not-an-index file falls through to the `<source>.db` sibling; any other
+    refusal is an error naming its reason.
+  - `read_identity` returns the lock-holding handle, and `add` copies the
+    rows through that same connection. The pathname is never reopened: the
+    earlier `ATTACH … mode=ro` did reopen it, so a file renamed over the path
+    between the two reads (as the indexer's own publication does) could lend
+    its rows to the other file's identity.
+  - The archive row and the copied rows are written in one master
+    transaction, and `finish` must succeed before `COMMIT`. Otherwise the
+    registration is rolled back and nothing is recorded.
+- **The replace check stays fail-safe.** An existing index the loader
+  refuses, or one that changed while it was checked, is not replaceable.
+  With `--index` the command fails. Without it, the indexer's existing
+  fallback (`./<name>.db` in the working directory, pinned by
+  `cwd_fallback_refuses_foreign_db`) applies, and its warning names the
+  reason. The refused file is never touched.
+- **Discovery never writes, and says what it refused.** The last-resort
+  probe of `*.db` files in the working directory uses the locked loader. A
+  refused candidate is not adopted, and when nothing is adopted the error
+  lists each refused candidate with its reason. Files that are not
+  BackupSage indexes are not listed.
+- **Federated search trusts no note from an incoherent read.** Its
+  incomplete and metadata-only notes, like its hits, count only after that
+  archive's `finish` succeeds.
+
+Limits, stated plainly:
+- **Headers are read through a plain descriptor.** POSIX record locks belong
+  to the process, and closing any descriptor on a file drops all of them. So
+  reading an index's header drops the lock of any *other* SQLite connection
+  this process holds on that file. `master sync`'s outer identity handle is
+  the only such case, and it is not read again after `add` re-reads the
+  file. Tests that hold a writer's lock in-process must not open the index
+  themselves first.
+- **`master sync` status label:** it still records any `read_identity`
+  refusal as `db-missing`, with the reason in its action text.
+- **Test seam.** In debug builds only, `BACKUPSAGE_TEST_TOUCH_INDEX_AFTER_OPEN`
+  makes every locked open rewrite the index in place with its own bytes.
+  The content is unchanged but the file stamp moves, so tests can drive a
+  change-during-read through a real command process. Release builds contain
+  no such path.
+
+`tests/locked_reads.rs` pins these rules. Every mechanism is pinned
+through a command as well as the library, including a genuinely busy index,
+discovery without `--index`, and a file renamed over the path mid
+registration. Each was shown to fail when removed, and again when weakened;
+the table is in #102's pull request.
+
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-26T13:52:04-04:00
+**Signed:** max-cloud (Claude) · 2026-09-26T18:14:36-04:00
