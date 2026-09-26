@@ -12,6 +12,7 @@
 | [0008](0008-received-btrfs-landlock-borg-containment.md) | Received Btrfs snapshots with Landlock for Borg containment | accepted | 2026-09-11 |
 | [0009](0009-core-cli-web-workspace.md) | Core, CLI and web workspace boundaries | proposed | 2026-09-12 |
 | [0010](0010-snapshot-diff-evidence.md) | Historical snapshot diff evidence and conservative identity rules | accepted | 2026-09-12 |
+| [0011](0011-coverage-replicas-and-floors.md) | Coverage replicas and minimum-copy floors | proposed | 2026-09-26 |
 
 The [ADR 0009 PDF](pdf/0009-core-cli-web-workspace.pdf) is collected under
 `docs/adr/pdf/` to keep issue #28's changes within its authorized paths.

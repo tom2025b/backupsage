@@ -634,48 +634,61 @@ fn display_path_is_lossy_but_raw_bytes_are_kept() {
 // ── Full-hash keys, ordering of every list, and boundaries ──────────────────
 
 #[test]
-fn hashes_differing_only_in_the_last_byte_form_separate_groups() {
-    let mut last_byte = h(1);
-    last_byte[31] = 2;
-    let mut near_twin = file(1, "b", 1, 5);
-    near_twin.content_hash = Some(last_byte);
-    let cov = run(&[
-        complete(1, vec![file(1, "a", 1, 5)]),
-        complete(2, vec![near_twin]),
-    ]);
+fn hashes_differing_at_any_single_byte_form_separate_groups() {
+    // Every byte of the 32-byte key must separate groups, not just the last.
+    for position in 0..32 {
+        let mut twin_hash = h(1);
+        twin_hash[position] = 2;
+        let mut near_twin = file(1, "b", 1, 5);
+        near_twin.content_hash = Some(twin_hash);
+        let cov = run(&[
+            complete(1, vec![file(1, "a", 1, 5)]),
+            complete(2, vec![near_twin]),
+        ]);
 
-    let keys: Vec<[u8; 32]> = cov.groups.iter().map(|g| g.content_hash).collect();
-    assert_eq!(keys, vec![h(1), last_byte]);
-    assert_eq!(cov.groups[0].copies, vec![rref(1, "a", 1)]);
-    assert_eq!(cov.groups[1].copies, vec![rref(2, "b", 1)]);
-    for g in &cov.groups {
-        assert_eq!(g.replicas, ReplicaCount::Exact(1));
+        let keys: Vec<[u8; 32]> = cov.groups.iter().map(|g| g.content_hash).collect();
+        assert_eq!(keys, vec![h(1), twin_hash], "byte {position}");
+        assert_eq!(
+            cov.groups[0].copies,
+            vec![rref(1, "a", 1)],
+            "byte {position}"
+        );
+        assert_eq!(
+            cov.groups[1].copies,
+            vec![rref(2, "b", 1)],
+            "byte {position}"
+        );
+        for g in &cov.groups {
+            assert_eq!(g.replicas, ReplicaCount::Exact(1), "byte {position}");
+        }
     }
 }
 
 /// Several aliases and unknown rows per source, deliberately out of order.
+/// Lexical path order OPPOSES source order: source 1 holds "z…" paths and
+/// source 2 holds "a…" paths, so only a source-first sort passes.
 fn aliases_and_unknowns() -> Vec<CoverageSource> {
     vec![
         complete(
             1,
             vec![
-                file(1, "f", 1, 5),
-                link(2, "l3", EntryKind::Hardlink, Some(1)),
-                link(3, "l1", EntryKind::Hardlink, Some(1)),
-                link(4, "l2", EntryKind::Hardlink, Some(1)),
-                unhashed(5, "u3", 9, 0),
-                unhashed(6, "u1", 9, flags::READ_ERROR),
-                unhashed(7, "u2", 9, 0),
+                file(1, "zf", 1, 5),
+                link(2, "zl3", EntryKind::Hardlink, Some(1)),
+                link(3, "zl1", EntryKind::Hardlink, Some(1)),
+                link(4, "zl2", EntryKind::Hardlink, Some(1)),
+                unhashed(5, "zu3", 9, 0),
+                unhashed(6, "zu1", 9, flags::READ_ERROR),
+                unhashed(7, "zu2", 9, 0),
             ],
         ),
         complete(
             2,
             vec![
-                unhashed(1, "v2", 9, 0),
-                unhashed(2, "v1", 9, 0),
-                file(3, "g", 1, 5),
-                link(4, "m2", EntryKind::Hardlink, Some(1)),
-                link(5, "m1", EntryKind::Hardlink, Some(1)),
+                unhashed(1, "av2", 9, 0),
+                unhashed(2, "av1", 9, 0),
+                file(3, "ag", 1, 5),
+                link(4, "am2", EntryKind::Hardlink, Some(1)),
+                link(5, "am1", EntryKind::Hardlink, Some(1)),
             ],
         ),
     ]
@@ -685,26 +698,27 @@ fn aliases_and_unknowns() -> Vec<CoverageSource> {
 fn aliases_and_unknown_content_are_ordered_whatever_the_input_order() {
     let cov = run(&aliases_and_unknowns());
 
+    // Exact (source_id, raw_path, file_id) order: source first.
     let aliases = &find(&cov, 1).aliases;
     assert_eq!(
         *aliases,
         vec![
-            rref(1, "l1", 3),
-            rref(1, "l2", 4),
-            rref(1, "l3", 2),
-            rref(2, "m1", 5),
-            rref(2, "m2", 4),
+            rref(1, "zl1", 3),
+            rref(1, "zl2", 4),
+            rref(1, "zl3", 2),
+            rref(2, "am1", 5),
+            rref(2, "am2", 4),
         ]
     );
     let unknown: Vec<RowRef> = cov.unknown_content.iter().map(|u| u.row.clone()).collect();
     assert_eq!(
         unknown,
         vec![
-            rref(1, "u1", 6),
-            rref(1, "u2", 7),
-            rref(1, "u3", 5),
-            rref(2, "v1", 2),
-            rref(2, "v2", 1),
+            rref(1, "zu1", 6),
+            rref(1, "zu2", 7),
+            rref(1, "zu3", 5),
+            rref(2, "av1", 2),
+            rref(2, "av2", 1),
         ]
     );
 
@@ -795,4 +809,18 @@ fn zero_size_rows_match_empty_content_and_rule_out_everything_else() {
     assert_eq!(presence(&cov, 1, 2), Presence::Absent);
     assert_eq!(presence(&cov, 1, 3), Presence::Absent);
     assert_eq!(find(&cov, 1).replicas, ReplicaCount::Exact(1));
+}
+
+#[test]
+fn five_byte_unhashed_row_leaves_empty_content_absent() {
+    // A trusted size of 5 cannot be the zero-length content.
+    let cov = run(&[
+        complete(1, vec![file(1, "empty", 0, 0)]),
+        complete(2, vec![unhashed(1, "five", 5, 0)]),
+    ]);
+    assert_eq!(find(&cov, 0).size, Some(0));
+    assert_eq!(presence(&cov, 0, 2), Presence::Absent);
+    assert_eq!(find(&cov, 0).replicas, ReplicaCount::Exact(1));
+    assert_eq!(cov.unknown_content.len(), 1);
+    assert_eq!(cov.unknown_content[0].row, rref(2, "five", 1));
 }
