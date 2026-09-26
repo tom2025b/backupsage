@@ -684,27 +684,31 @@ fn registration_is_abandoned_when_another_file_is_renamed_over_the_path() {
 
 const BUMP_ROWS_ONLY: &str = "UPDATE files SET mtime_unix = mtime_unix + 1;";
 
-/// The source's read lock is held while its rows are copied, not only while
-/// its identity is read.
+/// The source's read lock is held from the moment `read_identity` returns
+/// until the rows are copied, not only while the identity is read: a writer
+/// is refused before replication's first statement on the handle and again
+/// just before the rows are read.
 #[test]
 fn source_lock_is_held_while_rows_are_replicated() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (_, db) = indexed_source(tmp.path(), "a.tar");
-    let master_path = tmp.path().join("master.db");
-    let writer = sqlite_writer_at(ReadPoint::DuringReplication, &db);
-    let mut m = master::open_at(&master_path).unwrap();
-    let added = m.add(&db);
-    drop(m);
-    let writer = writer.borrow_mut().take().expect("the hook ran");
-    assert!(
-        writer.is_err(),
-        "a writer committed while rows were replicated"
-    );
-    added.unwrap();
-    let (uuids, rows) = catalogue(&master_path);
-    assert_eq!(uuids.len(), 1);
-    assert_ne!(uuids[0], "rewritten");
-    assert_eq!(rows, BTreeSet::from([1_700_000_001]));
+    for point in [ReadPoint::BeforeReplication, ReadPoint::DuringReplication] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, db) = indexed_source(tmp.path(), "a.tar");
+        let master_path = tmp.path().join("master.db");
+        let writer = sqlite_writer_at(point, &db);
+        let mut m = master::open_at(&master_path).unwrap();
+        let added = m.add(&db);
+        drop(m);
+        let writer = writer.borrow_mut().take().expect("the hook ran");
+        assert!(
+            writer.is_err(),
+            "{point:?}: a writer committed while the source was held for replication"
+        );
+        added.unwrap();
+        let (uuids, rows) = catalogue(&master_path);
+        assert_eq!(uuids.len(), 1, "{point:?}");
+        assert_ne!(uuids[0], "rewritten", "{point:?}");
+        assert_eq!(rows, BTreeSet::from([1_700_000_001]), "{point:?}");
+    }
 }
 
 /// Through the real commands (a debug-build seam rewrites each index in

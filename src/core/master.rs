@@ -543,6 +543,7 @@ impl Master {
     /// come from the snapshot the identity was read from. Values pass through
     /// untouched, as `INSERT … SELECT` did.
     fn replicate_from(&mut self, src: &Connection, archive_id: i64) -> Result<u64> {
+        crate::index_read::run_mid_read_hook(crate::index_read::ReadPoint::BeforeReplication);
         // Older per-source indexes have no path_raw column; replicate NULL.
         let raw_col = if searcher::has_column(src, "files", "path_raw") {
             "path_raw"

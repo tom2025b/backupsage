@@ -283,6 +283,9 @@ pub enum ReadPoint {
     /// Master registration: after `read_identity`'s statements, while the
     /// handle it returns keeps the lock for the rows its caller replicates.
     HeldByCaller,
+    /// Master registration: the first thing replication does, before any
+    /// further statement on the handle `read_identity` returned.
+    BeforeReplication,
     /// Master registration: rows are about to be copied through the handle,
     /// inside the catalog transaction.
     DuringReplication,
