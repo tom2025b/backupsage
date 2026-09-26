@@ -21,7 +21,8 @@
 //!
 //! See ADR 0011 for how each registry state maps to evidence and trust.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
@@ -228,7 +229,17 @@ fn open_master_immutable(path: &Path) -> Result<Connection> {
 /// read and before its post-read guards.
 #[doc(hidden)]
 pub fn set_master_read_hook(hook: impl FnOnce() + 'static) {
-    let _ = hook;
+    MASTER_READ_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+thread_local! {
+    static MASTER_READ_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+fn run_master_read_hook() {
+    if let Some(hook) = MASTER_READ_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook();
+    }
 }
 
 /// Read the master's registry without writing anything beside it.
@@ -248,6 +259,7 @@ pub fn load_registry(master_path: &Path) -> Result<Vec<RegistrySource>> {
         .list()
         .with_context(|| format!("cannot read the registry in '{}'", master_path.display()))?;
 
+    run_master_read_hook();
     let after = fs::metadata(master_path).ok().map(|md| FileStamp::of(&md));
     if after != Some(before) || !master_sidecars(master_path).is_empty() {
         bail!(
@@ -309,6 +321,7 @@ pub fn build(registry: &[RegistrySource]) -> Result<LoadedCoverage> {
         }
     }
     let mut sources = Vec::with_capacity(ordered.len());
+    let mut uuids: BTreeMap<String, PathBuf> = BTreeMap::new();
     for entry in ordered {
         // Refuse an unknown registry status before touching the index.
         let registry_status = entry
@@ -318,6 +331,18 @@ pub fn build(registry: &[RegistrySource]) -> Result<LoadedCoverage> {
             .transpose()?
             .flatten();
         let loaded = diff_input::load_index(&entry.db_path);
+        // A copied index is the same evidence under another name, never a
+        // second replica.
+        if let Some(uuid) = loaded.snapshot.info.index_uuid.clone() {
+            if let Some(first) = uuids.insert(uuid.clone(), entry.db_path.clone()) {
+                bail!(
+                    "'{}' and '{}' are the same index (index_uuid {uuid}); a copy of \
+                     an index is not a second replica",
+                    first.display(),
+                    entry.db_path.display()
+                );
+            }
+        }
         sources.push(map_source(entry, registry_status, loaded));
     }
     Ok(LoadedCoverage { sources })
@@ -408,6 +433,16 @@ fn map_source(
     }
     if evidence == SourceEvidence::Unavailable {
         rows.clear();
+    }
+    // An unplugged or unreadable source: its rows are history, listed but
+    // never proof of a copy there now (ADR 0011).
+    if evidence != SourceEvidence::Unavailable
+        && matches!(
+            snapshot.info.source_currency,
+            SourceCurrency::Offline | SourceCurrency::Denied
+        )
+    {
+        evidence = SourceEvidence::Unreachable;
     }
 
     // Trust from what reading showed now: an unusable index, then the live

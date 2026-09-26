@@ -77,7 +77,11 @@ and writes nothing beside any of them.
    evidence: only the index can confirm they are current.
 10. Evidence follows what reading the index showed. A complete index is
     `Complete` (`NoContentHashes` when metadata-only). An incomplete index is
-    `Incomplete`. An index the loader refuses (missing, pending journal, WAL
+    `Incomplete`. An index whose source is offline or unreadable now is
+    `Unreachable`: its rows are listed as history, but its presence is
+    unknown for every group, so its copies are never counted as present and
+    content it alone holds reads as an unknown lower bound (`AtLeast(0)`),
+    never as zero copies. An index the loader refuses (missing, pending journal, WAL
     mode, multiply linked, busy, changed during the read, unreadable,
     including a pre-v1.0.1 layout without `path_raw`) or finds incompatible
     (another schema, hash algorithm or identity) is `Unavailable`, with the
@@ -102,8 +106,10 @@ and writes nothing beside any of them.
     | anything else | the load is refused |
 
 12. Ad-hoc `--db` indexes load the same way, with source ids 1, 2, … in
-    argument order and no registry status. The same index given twice is
-    refused, since it would count as two replicas.
+    argument order and no registry status. The same index given twice (the
+    same canonical path) is refused, and so is any index whose `index_uuid`
+    another input already has: a copied index is the same evidence under
+    another name, never a second replica.
 13. Sources are handled in source-id order whatever order the registry
     lists them in. The master stores no protected/reference role yet, so
     the caller passes protected source ids to the floors step.

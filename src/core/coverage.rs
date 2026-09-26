@@ -432,6 +432,11 @@ fn presence_in(
     building: &Building,
     size: Option<u64>,
 ) -> Presence {
+    // Historical rows of a source that cannot be reached now prove neither
+    // that a copy is still there nor that it is gone.
+    if source.evidence == SourceEvidence::Unreachable {
+        return Presence::Unknown(UnknownReason::SourceUnreachable);
+    }
     if let Some(copies) = building.copies.get(&source.source_id) {
         return Presence::Present {
             copies: copies.len(),
@@ -439,11 +444,12 @@ fn presence_in(
     }
     match source.evidence {
         SourceEvidence::Unavailable => Presence::Unknown(UnknownReason::SourceUnavailable),
+        SourceEvidence::Unreachable => Presence::Unknown(UnknownReason::SourceUnreachable),
         SourceEvidence::Incomplete => Presence::Unknown(UnknownReason::SourceIncomplete),
         SourceEvidence::NoContentHashes => {
             Presence::Unknown(UnknownReason::SourceHasNoContentHashes)
         }
-        SourceEvidence::Complete | SourceEvidence::Unreachable => match unknown.could_match(size) {
+        SourceEvidence::Complete => match unknown.could_match(size) {
             0 => Presence::Absent,
             rows => Presence::Unknown(UnknownReason::UnhashedRowsMayMatch { rows }),
         },
