@@ -254,6 +254,62 @@ is in this change's pull request. Among them:
   overwrites the file in place mid-read.
 - **Hard links:** `hardlinked_index_is_unavailable_because_its_journal_may_hide_elsewhere`.
 
+**Signed:** max-cloud (Claude) · 2026-09-26T13:52:04-04:00
+
+## Addendum (#102): one locked loader for every command
+
+Date: 2026-09-26 · Status: accepted · Issue: #102
+
+The #93 loader now lives in `index_read`, as `LockedIndex`, and every index
+read uses it: `search`, `top`, `inspect`, federated `search --all`, master
+registration (`read_identity`) and the re-index replace check
+(`assert_replaceable_index`). `diff_input` re-exports `open_index_readonly`,
+`InputNote`, `NoteCode`, `ReadPoint` and `set_mid_read_hook` under their #93
+names, and `load_index` is unchanged. `searcher::open_index` now returns the
+`LockedIndex` handle, which dereferences to the connection.
+
+Each caller must follow the same rules:
+- **Read under one transaction.** The handle holds a read transaction from
+  `LockedIndex::open` until `finish` or drop.
+- **Show results only after a clean `finish`.** `finish` (or
+  `searcher::finish_index`) must succeed first: no new sidecar, and an
+  unchanged file stamp.
+  - `search`, `top` and `inspect` finish before printing. `inspect` renders
+    into a string first.
+  - Federated search drops an archive whose read was not coherent.
+- **Refused layouts fail closed with their reason.**
+  - `search`, `top` and `inspect` exit 1 with `cannot read index '…' safely —
+    <code>: <detail>`. The missing-index and not-an-index messages keep their
+    v1.0 wording, which the contract fixtures pin.
+  - Federated search lists each refused archive in `skipped` as
+    `refused: <code>: <detail>`. A missing file stays `unreachable: …`.
+- **Master registration replicates the snapshot it identified.**
+  `read_identity` returns the lock-holding handle. `master add` keeps it
+  alive while `ATTACH … mode=ro` copies the rows, so a writer cannot commit
+  between the identity read and the replication. `add` itself is outside
+  #102's paths, so its stamp is not compared there; the lock is the
+  guarantee.
+- **The replace check stays fail-safe.** An existing index the loader
+  refuses, or one that changed while it was checked, is not replaceable.
+  With `--index` the command fails. Without it, the indexer's existing
+  fallback (`./<name>.db` in the working directory, pinned by
+  `cwd_fallback_refuses_foreign_db`) applies, and its warning names the
+  reason. The refused file is never touched.
+- **Discovery never writes.** The last-resort probe of `*.db` files in the
+  working directory uses the locked loader, so a refused candidate is not
+  adopted.
+
+Gaps measured but outside #102's paths:
+- **`resolve_db_arg` (`master.rs:360`):** a plain read-only open that runs
+  before `read_identity`. On a WAL-mode index it creates `-shm`/`-wal`, and the
+  leftover `-wal` then makes every command refuse that index as
+  `pending_journal`. The fix is a one-line switch to `LockedIndex`.
+- **`master sync`:** it records any `read_identity` refusal as `db-missing`,
+  with the reason in its action text.
+
+`tests/locked_reads.rs` pins these rules. Each mechanism was shown to fail
+when removed, and again when weakened; the table is in #102's pull request.
+
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-26T13:52:04-04:00
+**Signed:** max-cloud (Claude) · 2026-09-26T14:37:26-04:00

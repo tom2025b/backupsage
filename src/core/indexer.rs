@@ -488,9 +488,12 @@ fn assert_replaceable_index(dest: &Path, source: &Path, source_type: &str) -> Re
     if std::fs::symlink_metadata(dest).is_err() {
         return Ok(()); // nothing there — plain create
     }
+    // The shared locked loader (#102): a file it cannot read safely, as one
+    // coherent snapshot, is never proven replaceable.
     let conn = crate::searcher::open_index(dest).with_context(|| {
         format!(
-            "existing file '{}' is not a BackupSage index; refusing to replace it",
+            "existing file '{}' is not a BackupSage index that can be read safely; \
+             refusing to replace it",
             dest.display()
         )
     })?;
@@ -504,6 +507,8 @@ fn assert_replaceable_index(dest: &Path, source: &Path, source_type: &str) -> Re
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         };
+    crate::searcher::finish_index(conn, dest)
+        .context("refusing to replace an index that changed while it was checked")?;
     if !same {
         anyhow::bail!(
             "existing index '{}' belongs to source '{}', not '{}'; refusing to replace it",

@@ -315,7 +315,10 @@ struct SourceIdentity {
     content_mode: crate::indexer::ContentMode,
 }
 
-fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
+/// The returned handle holds the index's read transaction: while the caller
+/// keeps it, a writer cannot commit, so the rows it then replicates belong
+/// to the same snapshot as this identity (#102).
+fn read_identity(db_path: &Path) -> Result<(crate::index_read::LockedIndex, SourceIdentity)> {
     let conn = searcher::open_index(db_path)?;
     let version = store::schema_version(&conn).unwrap_or(1);
     if version < 2 {
@@ -351,6 +354,7 @@ fn read_identity(db_path: &Path) -> Result<(Connection, SourceIdentity)> {
         phash_algo: searcher::get_meta(&conn, "phash_algo"),
         content_mode: store::content_mode(&conn),
     };
+    crate::index_read::run_mid_read_hook(crate::index_read::ReadPoint::HeldByCaller);
     Ok((conn, id))
 }
 
