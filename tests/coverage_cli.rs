@@ -128,6 +128,7 @@ fn corpus(dir: &Path) -> Corpus {
         .link(tar::EntryType::Symlink, b"sym", b"shared.txt")
         .file(b"raw-\xff", RAW_SHARED)
         .file(b"empty.txt", b"")
+        .link(tar::EntryType::Link, b"alias-of-empty", b"empty.txt")
         .write(dir, "a.tar");
     let b_tar = Tar::default()
         .file(b"copy/shared.txt", SHARED)
@@ -479,6 +480,10 @@ fn clean_master_classifies_every_group_and_exits_0() {
         "alias-of-shared"
     );
     assert_eq!(doc["excluded_groups"][0]["reason"], "empty_content");
+    assert_eq!(
+        doc["excluded_groups"][0]["aliases"][0]["path"],
+        "alias-of-empty"
+    );
     // Non-UTF-8 names keep their exact bytes.
     let b_only = group_by_path(&doc, "b-\u{fffd}.bin");
     assert_eq!(b_only["copies"][0]["path_bytes"], to_hex(b"b-\xfe.bin"));
@@ -659,6 +664,9 @@ fn a_degraded_source_exits_2_even_when_every_group_meets_the_floor() {
     assert_eq!(doc["summary"]["inconclusive"], 0);
     assert_eq!(doc["summary"]["sources_degraded"], 1);
     assert_eq!(doc["coverage_state"], "inconclusive");
+    // One trusted copy meets a floor of 1 and is still the only copy.
+    assert_eq!(doc["groups"][0]["only_copy"], true);
+    assert_totals(&doc, "degraded");
 }
 
 #[test]

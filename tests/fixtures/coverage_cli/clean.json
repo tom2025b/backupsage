@@ -24,7 +24,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 8,
+      "rows": 9,
       "index_notes": [
         {
           "code": "source_stat_matches",
@@ -382,7 +382,14 @@
           "protected": false
         }
       ],
-      "aliases": []
+      "aliases": [
+        {
+          "source_id": 1,
+          "path": "alias-of-empty",
+          "path_bytes": "616c6961732d6f662d656d707479",
+          "file_id": 9
+        }
+      ]
     }
   ],
   "unknown_content": [],
@@ -417,6 +424,6 @@
     "shadowed_rows": 1,
     "symlink_rows": 1,
     "unmatched_hardlink_rows": 0,
-    "hardlink_aliases": 1
+    "hardlink_aliases": 2
   }
 }
