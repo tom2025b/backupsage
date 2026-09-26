@@ -82,7 +82,17 @@ fn floor(n: usize) -> FloorParams {
 
 /// Evaluate and check invariants every report must satisfy.
 fn eval(c: &Coverage, statuses: &[(i64, SourceStatus)], p: &FloorParams) -> FloorReport {
-    let r = evaluate(c, statuses, p).expect("valid floor input");
+    eval_protected(c, statuses, &[], p)
+}
+
+/// Evaluate with protected/reference sources and check report invariants.
+fn eval_protected(
+    c: &Coverage,
+    statuses: &[(i64, SourceStatus)],
+    protected: &[i64],
+    p: &FloorParams,
+) -> FloorReport {
+    let r = evaluate(c, statuses, protected, p).expect("valid floor input");
     let s = &r.summary;
     assert_eq!(s.min_copies, p.min_copies);
     assert_eq!(s.groups, r.groups.len());
@@ -94,6 +104,10 @@ fn eval(c: &Coverage, statuses: &[(i64, SourceStatus)], p: &FloorParams) -> Floo
             .sum::<usize>();
     assert_eq!(s.hardlink_aliases, emitted_aliases);
     assert_eq!(s.unknown_content_rows, r.unknown_content.len());
+    assert_eq!(
+        s.protected_replicas,
+        r.groups.iter().map(|g| g.protected_replicas).sum::<usize>()
+    );
     for g in &r.groups {
         if g.only_copy {
             assert_eq!(g.trusted_replicas, 1);
@@ -265,6 +279,99 @@ fn unknown_presence_in_an_untrusted_source_is_still_inconclusive() {
     }
 }
 
+// ── Protected/reference copies (Tom's rule, 2026-09-26) ─────────────────────
+
+#[test]
+fn protected_copy_counts_toward_the_floor_like_any_trusted_copy() {
+    // 1 ordinary + 1 protected trusted copy meets a floor of 2.
+    for status in [SourceStatus::Ok, SourceStatus::Incomplete] {
+        let c = cov(&[
+            complete(1, vec![file(1, "a", 1, 5)]),
+            complete(2, vec![file(1, "ref", 1, 5)]),
+        ]);
+        let r = eval_protected(&c, &[(1, SourceStatus::Ok), (2, status)], &[2], &floor(2));
+        let g = only(&r);
+        assert_eq!(g.verdict, Verdict::MeetsFloor, "{status:?}");
+        assert_eq!(g.trusted_replicas, 2, "{status:?}");
+        assert_eq!(g.protected_replicas, 1, "{status:?}");
+        assert_eq!(r.summary.protected_replicas, 1, "{status:?}");
+    }
+}
+
+#[test]
+fn protected_replicas_are_marked_per_copy_and_counted_separately() {
+    let c = cov(&[
+        complete(1, vec![file(1, "a", 1, 5)]),
+        complete(2, vec![file(1, "ref", 1, 5), file(2, "ref2", 1, 5)]),
+        complete(3, vec![file(1, "vault", 1, 5), file(2, "solo", 2, 5)]),
+    ]);
+    let r = eval_protected(&c, &all_ok(&c), &[3, 2], &floor(3));
+    let marks: Vec<_> = r.groups[0]
+        .copies
+        .iter()
+        .map(|c| (c.row.clone(), c.protected))
+        .collect();
+    assert_eq!(
+        marks,
+        vec![
+            (rref(1, "a", 1), false),
+            (rref(2, "ref", 1), true),
+            (rref(2, "ref2", 2), true),
+            (rref(3, "vault", 1), true),
+        ]
+    );
+    // Replicas are sources: source 2's two copies are one protected replica.
+    assert_eq!(r.groups[0].protected_replicas, 2);
+    assert_eq!(r.groups[0].trusted_replicas, 3);
+    assert_eq!(r.groups[0].verdict, Verdict::MeetsFloor);
+    // Content 2 has only a protected copy: still one trusted only-copy.
+    assert_eq!(r.groups[1].protected_replicas, 1);
+    assert!(r.groups[1].only_copy);
+    assert_eq!(r.groups[1].verdict, Verdict::BelowFloor);
+    assert_eq!(r.summary.protected_replicas, 3);
+
+    // Without the designation, nothing is marked and the verdicts are equal.
+    let plain = eval(&c, &all_ok(&c), &floor(3));
+    assert!(plain.groups.iter().all(|g| g.protected_replicas == 0));
+    assert!(plain
+        .groups
+        .iter()
+        .flat_map(|g| &g.copies)
+        .all(|c| !c.protected));
+    assert_eq!(plain.groups[0].verdict, Verdict::MeetsFloor);
+}
+
+#[test]
+fn protected_source_with_an_untrusted_status_is_shown_but_not_counted() {
+    for status in [
+        SourceStatus::StaleIndex,
+        SourceStatus::DbMissing,
+        SourceStatus::ArchiveMissing,
+    ] {
+        let c = cov(&[
+            complete(1, vec![file(1, "a", 1, 5)]),
+            complete(2, vec![file(1, "ref", 1, 5)]),
+        ]);
+        let r = eval_protected(&c, &[(1, SourceStatus::Ok), (2, status)], &[2], &floor(2));
+        let g = only(&r);
+        assert_eq!(g.verdict, Verdict::BelowFloor, "{status:?}");
+        assert_eq!((g.trusted_replicas, g.untrusted_replicas), (1, 1));
+        assert_eq!(g.protected_replicas, 0, "{status:?}");
+        let copy = &g.copies[1];
+        assert_eq!(copy.row, rref(2, "ref", 1));
+        assert!(copy.protected && !copy.counts_toward_floor, "{status:?}");
+    }
+}
+
+#[test]
+fn protected_designations_must_name_known_sources_once() {
+    let c = cov(&[complete(1, vec![file(1, "a", 1, 5)]), complete(2, vec![])]);
+    let p = floor(2);
+    assert!(evaluate(&c, &all_ok(&c), &[3], &p).is_err(), "unknown id");
+    assert!(evaluate(&c, &all_ok(&c), &[2, 2], &p).is_err(), "duplicate");
+    assert!(evaluate(&c, &all_ok(&c), &[2, 1], &p).is_ok());
+}
+
 #[test]
 fn every_copy_is_listed_with_label_and_status_trusted_or_not() {
     let c = cov(&[
@@ -321,7 +428,7 @@ fn status_input_must_name_every_source_exactly_once() {
         ("unknown id", &unknown_id[..]),
     ] {
         assert!(
-            evaluate(&c, statuses, &p).is_err(),
+            evaluate(&c, statuses, &[], &p).is_err(),
             "{name} must be refused"
         );
     }
@@ -599,7 +706,7 @@ fn default_floor_is_two() {
 #[test]
 fn floor_of_zero_is_refused() {
     let c = cov(&[complete(1, vec![file(1, "a", 1, 5)])]);
-    let err = evaluate(&c, &all_ok(&c), &floor(0)).unwrap_err();
+    let err = evaluate(&c, &all_ok(&c), &[], &floor(0)).unwrap_err();
     assert!(err.to_string().contains("at least 1"), "{err}");
 }
 

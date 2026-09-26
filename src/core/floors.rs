@@ -9,7 +9,7 @@
 //! `Unknown` presence makes it `Inconclusive`; only a fully known count can
 //! be `BelowFloor`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 
@@ -73,6 +73,8 @@ pub struct FloorCopy {
     pub source_label: String,
     pub status: SourceStatus,
     pub counts_toward_floor: bool,
+    /// The copy is on a protected/reference source.
+    pub protected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +88,9 @@ pub struct GroupFloor {
     pub trusted_replicas: usize,
     /// Sources holding a copy whose status does not count.
     pub untrusted_replicas: usize,
+    /// Trusted replicas on protected/reference sources; included in
+    /// `trusted_replicas`, shown separately.
+    pub protected_replicas: usize,
     /// Sources where presence could not be determined.
     pub unknown_sources: usize,
     /// Every copy, trusted or not, sorted by (source id, raw path, file id).
@@ -119,6 +124,8 @@ pub struct FloorSummary {
     pub below_floor: usize,
     pub inconclusive: usize,
     pub only_copy: usize,
+    /// Sum of `protected_replicas` over in-scope groups.
+    pub protected_replicas: usize,
     pub excluded_groups: usize,
     pub shadowed_rows: usize,
     pub symlink_rows: usize,
@@ -141,10 +148,12 @@ pub struct FloorReport {
 }
 
 /// Classify every group in `coverage` against `params.min_copies`.
-/// `statuses` must name every coverage source exactly once.
+/// `statuses` must name every coverage source exactly once; `protected`
+/// names the sources designated protected/reference, each at most once.
 pub fn evaluate(
     coverage: &Coverage,
     statuses: &[(i64, SourceStatus)],
+    protected: &[i64],
     params: &FloorParams,
 ) -> Result<FloorReport> {
     if params.min_copies == 0 {
@@ -166,6 +175,15 @@ pub fn evaluate(
     }
     if let Some(id) = status_of.keys().find(|id| !labels.contains_key(id)) {
         bail!("status given for unknown source {id}");
+    }
+    let mut protected_ids = BTreeSet::new();
+    for &id in protected {
+        if !labels.contains_key(&id) {
+            bail!("protected designation for unknown source {id}");
+        }
+        if !protected_ids.insert(id) {
+            bail!("source {id} is designated protected more than once");
+        }
     }
 
     let mut groups = Vec::new();
@@ -220,6 +238,7 @@ pub fn evaluate(
                     source_label: labels[&row.source_id].to_owned(),
                     status,
                     counts_toward_floor: status.counts_toward_floor(),
+                    protected: false,
                 }
             })
             .collect();
@@ -230,6 +249,7 @@ pub fn evaluate(
             only_copy: trusted == 1 && unknown == 0,
             trusted_replicas: trusted,
             untrusted_replicas: untrusted,
+            protected_replicas: 0,
             unknown_sources: unknown,
             copies,
             aliases: group.aliases.clone(),
@@ -252,6 +272,7 @@ pub fn evaluate(
         below_floor: count(Verdict::BelowFloor),
         inconclusive: count(Verdict::Inconclusive),
         only_copy: groups.iter().filter(|g| g.only_copy).count(),
+        protected_replicas: 0,
         excluded_groups: excluded_groups.len(),
         shadowed_rows: count_rows(ExclusionReason::Shadowed),
         symlink_rows: count_rows(ExclusionReason::Symlink),
