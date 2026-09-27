@@ -141,9 +141,11 @@ and renders the floors result.
     rows and excluded rows by (source id, raw path bytes, file id). A
     master assigns source ids in registration order, so registering the
     same sources in another order changes the ids and nothing else. The
-    terminal text lists the same rows in the same order. It lists every
-    below-floor and inconclusive group and every unknown-content row, and
-    counts the groups that meet the floor.
+    terminal text lists the same rows in the same order: the groups that
+    do not meet the floor are one list in content-hash order, each line
+    naming its verdict (below floor or inconclusive), never regrouped by
+    verdict. It lists every unknown-content row and counts the groups that
+    meet the floor.
 15. Every summary total is counted from the rows the report emits, after
     filtering. `coverage_state` is `complete` only when every source is a
     complete, `ok` source, no emitted group is inconclusive and no emitted
@@ -152,12 +154,17 @@ and renders the floors result.
     known.
 16. Scope filters follow `dedup`. `--archive` chooses the sources the
     question is about. `--min-size` and `--include-empty` put content out
-    of scope by size (rule 5). `--ext` (ASCII case folded, `lower(path)
+    of scope by size (rule 5). `--kind` (the indexer's recorded kind of
+    each row, `f.kind = ?`), `--ext` (ASCII case folded, `lower(path)
     LIKE '%.ext'`) and `--path-glob` (SQLite `GLOB` over the display path,
     evaluated by SQLite) choose which content is reported, never which
-    copies count. Content is reported, with every copy, when any of its
-    copies or aliases matches; unknown-content and excluded rows are
-    reported when their own path matches. Filtering rows before grouping
+    copies count. They combine on one row, as dedup's `WHERE` clause does.
+    Content is reported, with every copy, when any of its copies or
+    aliases matches; unknown-content and excluded rows are reported when
+    they match themselves. `dedup` accepts any `--kind` and finds nothing
+    for a misspelt one; `coverage` refuses a kind outside dedup's
+    documented set (`image`, `raw`, `video`, `text`, `binary`), since
+    "nothing below the floor" would read as complete coverage. Filtering rows before grouping
     would make a renamed copy vanish and could turn a safe group into a
     false only-copy.
 17. `--protected` names protected/reference sources (rule 7) by id, label
@@ -169,15 +176,12 @@ and renders the floors result.
     through the output-safety boundary (ADR 0001): a new file only, never
     over an existing one, and never onto or inside anything the run read:
     the master, every index and its sidecars, every source archive, and
-    every directory source's whole tree.
-
-## Open decisions
-
-- **Kind filter.** `dedup --kind` filters on the `kind` column, which the
-  indexer decides from a file's bytes (a binary probe, media detection).
-  The coverage loader reads rows through the shared `diff_input` loader,
-  which does not select `kind`, so `coverage` offers no `--kind` yet.
-  Adding it means reading `kind` in that shared loader.
+    every directory source's whole tree. Inputs are protected by name as
+    well as by identity, so a name is refused even when nothing exists
+    there: a missing index, an unplugged archive's recorded path, and the
+    `-wal`, `-shm` and `-journal` names beside the master and every index.
+    A report written there would be taken for that input, or would make
+    the index look in use.
 
 ## Consequences
 

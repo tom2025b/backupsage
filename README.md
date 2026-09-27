@@ -172,14 +172,15 @@ never extra copies; symlinks and shadowed paths are listed and not judged.
 |------|-------------|
 | `--min-copies N` | Trusted copies wanted per content (default 2, at least 1) |
 | `--min-size`, `--include-empty` | Put small or empty content out of scope (listed, not judged) |
-| `--ext`, `--path-glob` | Report only content with a matching path, as `dedup` matches; every copy still counts |
+| `--kind`, `--ext`, `--path-glob` | Report only content with a matching row, as `dedup` matches; every copy still counts |
 | `--archive ID_OR_LABEL` (repeatable) | Ask about these sources only |
 | `--protected ID_OR_LABEL` (repeatable) | Mark protected/reference sources: they count like any trusted copy and are shown separately |
 | `--db <FILE>` (repeatable) | Ad-hoc mode without the master |
-| `--json`, `-o FILE` | Versioned JSON report; `-o` never overwrites and never writes into an input |
+| `--json`, `-o FILE` | Versioned JSON report; `-o` never overwrites and never takes the name of an input, even a missing one |
 
-`dedup`'s `--kind` is not offered: a file's kind is decided from its bytes
-at indexing time, and coverage does not read it yet. Exit codes: `0` every
+Unlike `dedup`, an unknown `--kind` is refused rather than matching
+nothing. The terminal lists groups that miss the floor in the JSON's order,
+each marked below floor or inconclusive. Exit codes: `0` every
 source is a complete, `ok` source and nothing is inconclusive · `1` error ·
 `2` completed, but a source is degraded (unreachable, unavailable, stale,
 incomplete or without hashes) or some content or row is unknown. Content

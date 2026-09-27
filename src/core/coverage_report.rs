@@ -86,6 +86,9 @@ pub fn select(registry: Vec<RegistrySource>, ids: &[i64]) -> Vec<RegistrySource>
         .collect()
 }
 
+/// Every row's recorded kind, by (source id, file id).
+type RowKinds = BTreeMap<(i64, i64), String>;
+
 /// `--kind`, `--ext` and `--path-glob`, evaluated with dedup's own
 /// semantics.
 struct PathFilter {
@@ -93,7 +96,7 @@ struct PathFilter {
     exts: Vec<String>,
     glob: Option<(Connection, String)>,
     /// The wanted kind, and every row's kind by (source id, file id).
-    kind: Option<(String, BTreeMap<(i64, i64), String>)>,
+    kind: Option<(String, RowKinds)>,
 }
 
 impl PathFilter {
