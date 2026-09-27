@@ -17,6 +17,7 @@ pub mod floors;
 pub mod format;
 pub mod index_read;
 pub mod indexer;
+pub mod legacy;
 pub mod master;
 pub mod outpath;
 pub mod phash;

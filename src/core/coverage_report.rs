@@ -534,6 +534,7 @@ pub fn build_report(
                     UnknownContentReason::UnsupportedSparse => "unsupported_sparse",
                     UnknownContentReason::PaxUnparsed => "pax_unparsed",
                     UnknownContentReason::NotHashed => "not_hashed",
+                    UnknownContentReason::LegacyNameUncertain => "legacy_name_uncertain",
                 },
             },
         ));

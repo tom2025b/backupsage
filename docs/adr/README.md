@@ -13,6 +13,10 @@
 | [0009](0009-core-cli-web-workspace.md) | Core, CLI and web workspace boundaries | proposed | 2026-09-12 |
 | [0010](0010-snapshot-diff-evidence.md) | Historical snapshot diff evidence and conservative identity rules | accepted | 2026-09-12 |
 | [0011](0011-coverage-replicas-and-floors.md) | Coverage replicas and minimum-copy floors | proposed | 2026-09-26 |
+| [0012](0012-directory-content-reuse.md) | Full-content verification before directory result reuse | proposed | 2026-09-26 |
 
 The [ADR 0009 PDF](pdf/0009-core-cli-web-workspace.pdf) is collected under
 `docs/adr/pdf/` to keep issue #28's changes within its authorized paths.
+
+<!-- last_edited_by: codex -->
+<!-- **Signed:** codex · 2026-09-26T22:21:19-04:00 -->
