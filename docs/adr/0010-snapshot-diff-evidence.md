@@ -335,47 +335,82 @@ the table is in #102's pull request.
 
 **Signed:** max-cloud (Claude) · 2026-09-26T18:14:36-04:00
 
-## Addendum (#105): legacy indexes without raw-path columns
+## Addendum (#105): indexes from older writers
 
 Indexes written before v1.0.1 have no `path_raw` or `link_target_raw`
 column. The shared loader refused them as unreadable. It now maps them,
-the way master replication already did: a missing column reads as NULL.
-Nothing else about the read changes. The same pre-open guards, the one read
-transaction and the `finish` stamp apply, and an unknown entry type is
-still refused by coverage.
+the way master replication already did: a column that has been shown to be
+missing reads as NULL. The probe is fallible. If it fails, the index is
+unavailable and keeps SQLite's own diagnostic, because a probe error is
+never read as "absent". Nothing else about the read changes. The same
+pre-open guards, the one read transaction and the `finish` stamp apply,
+and an unknown entry type is still refused by coverage.
 
-What such an index can and cannot tell:
+What an older writer's index can and cannot tell:
 - **A UTF-8 name is exact.** Before v1.0.1 every name was stored as text,
   and a lossy rendering never changes valid UTF-8. So a legacy name
   without U+FFFD is the entry's exact bytes, the same row a current index
   would hold.
 - **A lossy name is not.** A non-UTF-8 name was stored only as its lossy
   rendering. U+FFFD marks every such name, and also a name that genuinely
-  held U+FFFD, since the two cannot be told apart. The loader flags each
-  such row in memory: `flags::LOSSY_PATH` for the name and
-  `flags::LOSSY_LINK_TARGET` for the link target. These flags are never
-  written to any index. The input also gets a `legacy_lossy_paths` note
-  that counts the rows.
+  held U+FFFD, since the two cannot be told apart. The loader flags such a
+  row with `flags::LOSSY_PATH`, or `flags::LOSSY_LINK_TARGET` for the link
+  target, and adds a `legacy_lossy_paths` note.
+- **A sparse row from before #63 is not trustworthy at all.** That indexer
+  read PAX-sparse members through tar-rs. It hashed the *condensed* stream,
+  stored the condensed size, and for 0.1 and 1.0 kept the synthetic
+  `%d/GNUSparseFile.%p/%f` name. The v1.0.1 writer did the same with the
+  raw-path columns present, so the layout does not identify these indexes.
+  The `content_mode` meta key does: it arrived with #70, which already
+  carried #63's handling. Every `SPARSE` row of an index without that key
+  gets `flags::LEGACY_SPARSE`, and the index gets a `legacy_sparse_rows`
+  note. That includes old-GNU rows, whose hash was in fact logical: the row
+  alone cannot tell the dialects apart. Today's sparse rows are not
+  touched.
 
-How the engines treat a lossy row:
-- **`diff`.** The name could be any path that renders the same, so the row
-  has no key in the effective namespace. It neither shadows nor is
-  shadowed, and it is reported as `inconclusive` / `lossy_legacy_path`.
-  The same holds for every exact path on the other side that it could be.
-  Such a path is never `added`, `removed`, or moved to or from. Exact names
-  that no lossy name could be are compared as before.
-- **Coverage.** A lossy file is unknown content (`LossyLegacyPath`), never
-  a copy, and it takes no part in shadowing. It still counts among the
-  source's unknown rows, so the content it could hold is never ruled
-  `Absent` there. The replica count stays a lower bound. Its exact UTF-8
-  rows count like any other source's.
+None of these flags is ever written to an index. `crate::legacy` says what
+a flagged name could be: the stored name and, for a sparse wrapper, `%d/%f`
+(and `%f` when `%d` is `.`). A lossy name also stands for every path that
+renders the same.
 
-`tests/legacy_paths.rs` pins these rules against a legacy copy of a real
-index. So does `pre_v1_0_1_layout_is_mapped_not_refused` in
-`tests/coverage_input.rs`, which replaces #103's refusal fixture. Each
-rule was shown to fail when removed, and again when weakened; the table is
-in #105's pull request.
+How the engines treat a row whose name is uncertain (lossy or legacy
+sparse):
+- **`diff`.**
+  - The row has no key in the effective namespace. It neither shadows nor
+    is shadowed, and it is reported as `inconclusive` /
+    `legacy_name_uncertain`.
+  - Any exact path on the other side that it could be is never `added` or
+    `removed`, and never moved to or from.
+  - An earlier exact row on its own side at one of its possible paths may
+    have been overwritten when extracted, so it is inconclusive too.
+  - A legacy sparse hash is never trusted. As rule 4 already requires, it
+    switches move inference off for the snapshot, and `move_inference`
+    reports it as `unsupported_sparse`.
+- **Coverage.**
+  - Such a file is unknown content, never a copy. A legacy sparse row is
+    `UnsupportedSparse`, and a lossy one is `LegacyNameUncertain`.
+  - So is an earlier exact file that it could overwrite
+    (`LegacyNameUncertain`).
+  - It takes no part in shadowing, but it still counts among the source's
+    unknown rows. Content it could hold is therefore never ruled `Absent`,
+    and the replica count stays a lower bound.
+  - An exact file written *after* it is unaffected: it is what extraction
+    leaves.
+
+Limits, stated plainly:
+- The wrapper unwrapping follows GNU tar's fixed `%d/GNUSparseFile.%p/%f`
+  template, which libarchive also uses. A sparse name in any other shape is
+  taken to be exact, but its row is still never trusted as content.
+- An old-GNU sparse row from an old index loses its (correct) hash. That is
+  conservative: it becomes inconclusive, never wrong.
+
+`tests/legacy_paths.rs` pins these rules. The sparse cases use indexes that
+the old writers themselves (`bd9b3c2` and v1.0.1) wrote from #64's GNU tar
+fixtures; their provenance is in `tests/fixtures/legacy/README.md`. So does
+`pre_v1_0_1_layout_is_mapped_not_refused` in `tests/coverage_input.rs`,
+which replaces #103's refusal fixture. Each rule was shown to fail when
+removed, and again when weakened; the table is in #105's pull request.
 
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-26T21:52:49-04:00
+**Signed:** max-cloud (Claude) · 2026-09-27T00:26:58-04:00

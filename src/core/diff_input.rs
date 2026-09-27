@@ -19,7 +19,7 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{anyhow, bail, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::index_read::{note, read_note, run_mid_read_hook, LockedIndex};
@@ -31,7 +31,7 @@ use crate::diff::{
     DiffReport, Entry, EntryType, Side, Snapshot, SnapshotInfo, SnapshotState, SourceCurrency,
 };
 use crate::report::to_hex;
-use crate::searcher::{get_meta, has_column};
+use crate::searcher::get_meta;
 use crate::store::{flags, SCHEMA_VERSION};
 
 /// What the loader established about one input, besides its rows.
@@ -170,18 +170,33 @@ fn read_index(
     // Rows are read only from a v3 layout; another schema is reported as
     // incompatible with no rows rather than guessed at.
     run_mid_read_hook(ReadPoint::BetweenStatements);
-    let (entries, lossy_rows) = if info.schema_version == Some(SCHEMA_VERSION) {
-        read_rows(&conn).map_err(|e| read_note(&e))?
+    // The `content_mode` key arrived with #70, which already carried #63's
+    // sparse handling; an index without it may hold condensed sparse rows.
+    let old_sparse_writer = health.content_mode.is_none();
+    let (entries, legacy) = if info.schema_version == Some(SCHEMA_VERSION) {
+        read_rows(&conn, old_sparse_writer).map_err(|e| read_note(&e))?
     } else {
-        (Vec::new(), 0)
+        (Vec::new(), LegacyRows::default())
     };
-    if lossy_rows > 0 {
+    if legacy.lossy > 0 {
         notes.push(note(
             NoteCode::LegacyLossyPaths,
             format!(
-                "{lossy_rows} row(s) come from an index older than v1.0.1 that stored only a \
+                "{} row(s) come from an index older than v1.0.1 that stored only a \
                  lossy rendering of the name or link target; their exact bytes are unknown, \
-                 so they are never treated as exact"
+                 so they are never treated as exact",
+                legacy.lossy
+            ),
+        ));
+    }
+    if legacy.sparse > 0 {
+        notes.push(note(
+            NoteCode::LegacySparseRows,
+            format!(
+                "{} sparse row(s) come from an indexer older than #63, which hashed the \
+                 condensed stream, stored its size and could keep a synthetic \
+                 GNUSparseFile name; their hash, size and name are never trusted",
+                legacy.sparse
             ),
         ));
     }
@@ -192,21 +207,46 @@ fn read_index(
     Ok(entries)
 }
 
+/// Rows the loader marked as written by an older indexer (#105).
+#[derive(Default)]
+struct LegacyRows {
+    /// Name or link target stored only as a lossy rendering.
+    lossy: usize,
+    /// Sparse rows from before #63's sparse handling.
+    sparse: usize,
+}
+
+/// Whether `files` has column `col`. Unlike [`crate::searcher::has_column`],
+/// a failed probe is an error, never "absent": reading NULL for a column
+/// that exists would drop its bytes with no reason given (#105).
+fn files_column(conn: &Connection, col: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_xinfo('files') WHERE name = ?1",
+        [col],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|found| found.is_some())
+}
+
 /// Every row, verbatim. Each field comes from the row itself: in particular
 /// a NULL `content_hash` stays `None`. The indexer stores no hash for an
 /// unsupported PAX-sparse row, and nothing here may supply one (ADR 0010).
 ///
-/// An index from before v1.0.1 has no `path_raw`/`link_target_raw` columns
-/// (#105); as in master replication, a missing column reads as NULL. Such an
-/// index stored every name as text, and a non-UTF-8 name as its lossy
-/// rendering, so U+FFFD marks each name whose bytes were never recorded
-/// (and a name that genuinely held U+FFFD, which cannot be told apart).
-/// Those rows carry [`flags::LOSSY_PATH`] / [`flags::LOSSY_LINK_TARGET`] and
-/// are counted in the second value; every other legacy name is exactly its
-/// UTF-8 bytes.
-fn read_rows(conn: &Connection) -> Result<(Vec<Entry>, usize)> {
-    let raw_path = has_column(conn, "files", "path_raw");
-    let raw_target = has_column(conn, "files", "link_target_raw");
+/// Rows from older indexers are marked, never rewritten (#105):
+/// - An index from before v1.0.1 has no `path_raw`/`link_target_raw`
+///   columns; as in master replication, a column shown to be missing reads
+///   as NULL. Such an index stored every name as text, and a non-UTF-8 name
+///   as its lossy rendering, so U+FFFD marks each name whose bytes were
+///   never recorded (and a name that genuinely held U+FFFD, which cannot be
+///   told apart): [`flags::LOSSY_PATH`] / [`flags::LOSSY_LINK_TARGET`].
+///   Every other legacy name is exactly its UTF-8 bytes.
+/// - An index from before #63 (`old_sparse_writer`) hashed PAX-sparse
+///   members' condensed stream: its `SPARSE` rows get
+///   [`flags::LEGACY_SPARSE`].
+fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, LegacyRows)> {
+    let raw_path = files_column(conn, "path_raw")?;
+    let raw_target = files_column(conn, "link_target_raw")?;
     let mut stmt = conn.prepare(&format!(
         "SELECT id, path, {}, entry_type, link_target, {},
                 size, mtime_unix, mode, content_hash, flags
@@ -221,7 +261,7 @@ fn read_rows(conn: &Connection) -> Result<(Vec<Entry>, usize)> {
     let lossy = |text: &str| text.contains('\u{fffd}');
     let mut rows = stmt.query([])?;
     let mut entries = Vec::new();
-    let mut lossy_rows = 0;
+    let mut legacy = LegacyRows::default();
     while let Some(row) = rows.next()? {
         let file_id: i64 = row.get(0)?;
         let path: String = row.get(1)?;
@@ -242,7 +282,11 @@ fn read_rows(conn: &Connection) -> Result<(Vec<Entry>, usize)> {
         }
         if unrecorded != 0 {
             row_flags |= unrecorded;
-            lossy_rows += 1;
+            legacy.lossy += 1;
+        }
+        if old_sparse_writer && row_flags & flags::SPARSE != 0 {
+            row_flags |= flags::LEGACY_SPARSE;
+            legacy.sparse += 1;
         }
         let malformed = |what: &str| anyhow!("malformed {what} on files row {file_id}");
         entries.push(Entry {
@@ -269,7 +313,7 @@ fn read_rows(conn: &Connection) -> Result<(Vec<Entry>, usize)> {
             run_mid_read_hook(ReadPoint::BetweenRows);
         }
     }
-    Ok((entries, lossy_rows))
+    Ok((entries, legacy))
 }
 
 /// Where the live source stands against what the index recorded. A `stat`
@@ -407,6 +451,9 @@ fn row_blocker(entry: &Entry) -> Option<MoveBlockerCause> {
         EntryType::Unsupported => MoveBlockerCause::UnsupportedEntryType,
         EntryType::File if entry.flags & flags::READ_ERROR != 0 => MoveBlockerCause::ReadError,
         EntryType::File if entry.flags & flags::PAX_UNPARSED != 0 => MoveBlockerCause::PaxUnparsed,
+        EntryType::File if entry.flags & flags::LEGACY_SPARSE != 0 => {
+            MoveBlockerCause::UnsupportedSparse
+        }
         EntryType::File if entry.content_hash.is_some() => return None,
         EntryType::File if entry.flags & flags::SPARSE != 0 => MoveBlockerCause::UnsupportedSparse,
         EntryType::File => MoveBlockerCause::NotHashed,

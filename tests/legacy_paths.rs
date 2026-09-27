@@ -242,6 +242,7 @@ fn coverage_counts_exact_legacy_rows_and_never_a_lossy_one() {
             Member::File(b"copy-of-plain", PLAIN),
             Member::File(b"copy-of-cafe", CAFE),
             Member::File(b"copy-of-first", FIRST),
+            Member::File(b"copy-of-second", SECOND),
         ],
     );
     let other = index(&other);
@@ -259,14 +260,16 @@ fn coverage_counts_exact_legacy_rows_and_never_a_lossy_one() {
             (Presence::Present { copies: 1 }, ReplicaCount::Exact(2))
         );
     }
-    // The legacy source holds FIRST under a lossy name, which another lossy
-    // name renders the same as: never a copy, and never ruled out either.
-    let (p, replicas) = presence(&loaded, FIRST, 1);
-    assert!(
-        matches!(p, Presence::Unknown(_)),
-        "a lossy row was read as {p:?}"
-    );
-    assert_eq!(replicas, ReplicaCount::AtLeast(1));
+    // The legacy source holds FIRST and SECOND under lossy names that render
+    // the same: neither is a copy, and neither is ruled out either.
+    for content in [FIRST, SECOND] {
+        let (p, replicas) = presence(&loaded, content, 1);
+        assert!(
+            matches!(p, Presence::Unknown(_)),
+            "a lossy row was read as {p:?}"
+        );
+        assert_eq!(replicas, ReplicaCount::AtLeast(1));
+    }
 
     let cov = loaded.coverage().unwrap();
     let lossy: Vec<_> = cov
@@ -277,7 +280,7 @@ fn coverage_counts_exact_legacy_rows_and_never_a_lossy_one() {
     assert_eq!(lossy.len(), 2, "{:?}", cov.unknown_content);
     assert!(lossy
         .iter()
-        .all(|u| u.reason == UnknownContentReason::LossyLegacyPath));
+        .all(|u| u.reason == UnknownContentReason::LegacyNameUncertain));
     assert!(
         cov.exclusions.iter().all(|x| x.row.path_raw != LOSSY_NAME),
         "a lossy row was shadowed: {:?}",
@@ -311,7 +314,7 @@ fn lossy_reasons(report: &diff::DiffReport) -> usize {
     report
         .changes
         .iter()
-        .filter(|c| c.kind == ChangeKind::Inconclusive && c.reason == Reason::LossyLegacyPath)
+        .filter(|c| c.kind == ChangeKind::Inconclusive && c.reason == Reason::LegacyNameUncertain)
         .count()
 }
 
@@ -400,7 +403,7 @@ fn diff_json_names_the_lossy_rows_and_their_reason() {
     assert_eq!(
         reasons
             .iter()
-            .filter(|r| **r == "lossy_legacy_path")
+            .filter(|r| **r == "legacy_name_uncertain")
             .count(),
         4,
         "{reasons:?}"
@@ -491,4 +494,438 @@ fn legacy_index_keeps_every_loader_guard() {
             .iter()
             .all(|e| e.path != b"rewritten"));
     }
+}
+
+// ── Review round 1 (#107): what the old writers really stored ──────────────
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// Every member of a tar as tar-rs reads it: for a PAX-sparse member that
+/// is the condensed stream the pre-#63 indexer hashed.
+fn members(archive: &Path) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut ar = tar::Archive::new(fs::File::open(archive).unwrap());
+    ar.entries()
+        .unwrap()
+        .map(|e| {
+            let mut e = e.unwrap();
+            let path = e.path_bytes().into_owned();
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut e, &mut data).unwrap();
+            (path, data)
+        })
+        .collect()
+}
+
+/// A copy of an index an old indexer wrote (tests/fixtures/legacy), with its
+/// recorded source pointed at a copy of the archive it indexed, so the
+/// source is reachable. Returns (index, archive).
+fn old_index(dir: &Path, db: &str, archive: &str) -> (PathBuf, PathBuf) {
+    let source = dir.join(Path::new(archive).file_name().unwrap());
+    fs::copy(fixture(archive), &source).unwrap();
+    let copy = dir.join(db);
+    fs::copy(fixture(&format!("legacy/{db}")), &copy).unwrap();
+    let md = fs::metadata(&source).unwrap();
+    let mtime = md
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let conn = rusqlite::Connection::open(&copy).unwrap();
+    for (key, value) in [
+        ("source", source.to_str().unwrap().to_owned()),
+        ("archive", source.to_str().unwrap().to_owned()),
+        ("archive_size", md.len().to_string()),
+        ("archive_mtime_unix", mtime.to_string()),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            [key, value.as_str()],
+        )
+        .unwrap();
+    }
+    (copy, source)
+}
+
+/// The old indexes, each with the sparse fixture it was written from.
+const OLD: [(&str, &str); 4] = [
+    ("pre101-pax00.db", "sparse/sparse-pax00.tar"),
+    ("pre101-pax10.db", "sparse/sparse-pax10.tar"),
+    ("pre101-oldgnu.db", "sparse/sparse-oldgnu.tar"),
+    ("v101-pax10.db", "sparse/sparse-pax10.tar"),
+];
+
+fn stored_hash(db: &Path, id: i64) -> [u8; 32] {
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let h: Vec<u8> = conn
+        .query_row("SELECT content_hash FROM files WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    h.try_into().unwrap()
+}
+
+#[test]
+fn old_sparse_rows_are_marked_and_their_neighbours_stay_exact() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (db, archive) in OLD {
+        let dir = tmp.path().join(db);
+        fs::create_dir_all(&dir).unwrap();
+        let (old, source) = old_index(&dir, db, archive);
+        let loaded = diff_input::load_index(&old);
+        assert_eq!(loaded.snapshot.info.state, SnapshotState::Complete, "{db}");
+        let sparse = &loaded.snapshot.entries[0];
+        assert_ne!(
+            sparse.flags & flags::LEGACY_SPARSE,
+            0,
+            "{db}: sparse row trusted"
+        );
+        let sentinel = entry(&loaded, b"sentinel.txt");
+        assert_eq!(sentinel.flags & (LOSSY | flags::LEGACY_SPARSE), 0, "{db}");
+        let note = loaded
+            .health
+            .notes
+            .iter()
+            .find(|n| n.code == NoteCode::LegacySparseRows)
+            .unwrap_or_else(|| panic!("{db}: {:?}", loaded.health.notes));
+        assert!(
+            note.detail.starts_with("1 sparse row(s)"),
+            "{db}: {}",
+            note.detail
+        );
+
+        // Today's indexer, on the same archive, is not touched.
+        let now = diff_input::load_index(&index(&source));
+        assert!(now
+            .snapshot
+            .entries
+            .iter()
+            .all(|e| e.flags & flags::LEGACY_SPARSE == 0));
+        assert!(!codes(&now).contains(&NoteCode::LegacySparseRows), "{db}");
+    }
+}
+
+#[test]
+fn a_condensed_sparse_hash_never_proves_a_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (db, archive) in OLD.iter().filter(|(db, _)| db.contains("pax")) {
+        let dir = tmp.path().join(db);
+        fs::create_dir_all(&dir).unwrap();
+        let (old, source) = old_index(&dir, db, archive);
+        let read = members(&source);
+        let (condensed, sentinel) = (&read[0].1, &read[1].1);
+        // The fixture is what the old indexer really stored: the hash of the
+        // condensed stream.
+        assert_eq!(
+            stored_hash(&old, 1),
+            *blake3::hash(condensed).as_bytes(),
+            "{db}: fixture does not hold the condensed hash"
+        );
+
+        // An ordinary file that holds exactly those fragments.
+        let other = tar(
+            &dir,
+            "fragments.tar",
+            &[
+                Member::File(b"holey.bin", condensed),
+                Member::File(b"sentinel-copy.txt", sentinel),
+            ],
+        );
+        let other = index(&other);
+        let loaded = build(&registry(&[(1, "old", &old), (2, "fragments", &other)])).unwrap();
+        let (p, replicas) = presence(&loaded, condensed, 1);
+        assert!(
+            matches!(p, Presence::Unknown(_)),
+            "{db}: condensed hash read as {p:?}"
+        );
+        assert_eq!(replicas, ReplicaCount::AtLeast(1), "{db}");
+        let cov = loaded.coverage().unwrap();
+        assert!(cov
+            .unknown_content
+            .iter()
+            .any(|u| u.row.source_id == 1 && u.reason == UnknownContentReason::UnsupportedSparse));
+        // The ordinary row beside it is still a trusted copy.
+        assert_eq!(
+            presence(&loaded, sentinel, 1),
+            (Presence::Present { copies: 1 }, ReplicaCount::Exact(2)),
+            "{db}"
+        );
+
+        // diff never calls the two holey.bin rows identical, or different.
+        let report = diff::compare(
+            &diff_input::load_index(&old).snapshot,
+            &diff_input::load_index(&other).snapshot,
+        )
+        .unwrap();
+        let holey: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| {
+                [&c.before, &c.after]
+                    .iter()
+                    .any(|e| e.as_ref().is_some_and(|e| e.path.ends_with("holey.bin")))
+            })
+            .collect();
+        assert!(!holey.is_empty(), "{db}");
+        assert!(
+            holey.iter().all(|c| c.kind == ChangeKind::Inconclusive),
+            "{db}: {holey:#?}"
+        );
+        assert_eq!(report.summary.byte_identical, 0, "{db}");
+        assert_eq!(report.summary.content_changed, 0, "{db}");
+    }
+}
+
+#[test]
+fn a_synthetic_sparse_name_stands_for_its_real_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    for db in ["pre101-pax10.db", "v101-pax10.db"] {
+        let dir = tmp.path().join(db);
+        fs::create_dir_all(&dir).unwrap();
+        let (old, source) = old_index(&dir, db, "sparse/sparse-pax10.tar");
+        let old = diff_input::load_index(&old);
+        assert!(
+            entry(&old, b"./GNUSparseFile.1370099/holey.bin").flags & flags::LEGACY_SPARSE != 0
+        );
+        let now = diff_input::load_index(&index(&source));
+        entry(&now, b"holey.bin");
+        for (before, after) in [(&old, &now), (&now, &old)] {
+            let report = diff::compare(&before.snapshot, &after.snapshot).unwrap();
+            assert_eq!(report.summary.added, 0, "{db}: {:#?}", report.changes);
+            assert_eq!(report.summary.removed, 0, "{db}: {:#?}", report.changes);
+            assert_eq!(report.summary.byte_identical, 1, "{db}: sentinel.txt");
+            assert_eq!(lossy_reasons(&report), 2, "{db}: {:#?}", report.changes);
+        }
+        // Move inference says why it is off on the old side.
+        let moves = diff_input::MoveInference::of(&old.snapshot, &now.snapshot);
+        assert!(!moves.enabled);
+        assert!(moves.blockers.iter().any(|b| b.side == diff::Side::Before
+            && b.cause == diff_input::MoveBlockerCause::UnsupportedSparse
+            && b.rows == Some(1)));
+    }
+}
+
+#[test]
+fn an_exact_row_a_sparse_wrapper_could_overwrite_is_not_a_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (old, source) = old_index(
+        tmp.path(),
+        "pre101-shadow-pax10.db",
+        "legacy/shadow-pax10.tar",
+    );
+    let read = members(&source);
+    let plain = &read[0].1;
+    let sentinel = &read[2].1;
+    assert_eq!(stored_hash(&old, 1), *blake3::hash(plain).as_bytes());
+
+    let other = tar(
+        tmp.path(),
+        "other.tar",
+        &[
+            Member::File(b"plain-copy", plain),
+            Member::File(b"sentinel-copy", sentinel),
+        ],
+    );
+    let other = index(&other);
+    let loaded = build(&registry(&[(1, "old", &old), (2, "other", &other)])).unwrap();
+    // GNU tar extracts the sparse member over the plain holey.bin.
+    let (p, replicas) = presence(&loaded, plain, 1);
+    assert!(
+        matches!(p, Presence::Unknown(_)),
+        "overwritten row read as {p:?}"
+    );
+    assert_eq!(replicas, ReplicaCount::AtLeast(1));
+    let cov = loaded.coverage().unwrap();
+    assert!(cov.unknown_content.iter().any(|u| u.row.source_id == 1
+        && u.row.path_raw == b"holey.bin"
+        && u.reason == UnknownContentReason::LegacyNameUncertain));
+    assert_eq!(
+        presence(&loaded, sentinel, 1),
+        (Presence::Present { copies: 1 }, ReplicaCount::Exact(2))
+    );
+
+    // diff: the plain holey.bin may not be what extraction leaves there.
+    let old = diff_input::load_index(&old);
+    let now = diff_input::load_index(&index(&source));
+    let report = diff::compare(&old.snapshot, &now.snapshot).unwrap();
+    let holey = report
+        .changes
+        .iter()
+        .find(|c| c.before.as_ref().is_some_and(|b| b.path == "holey.bin"))
+        .unwrap();
+    assert_eq!(
+        (holey.kind, holey.reason),
+        (ChangeKind::Inconclusive, Reason::LegacyNameUncertain),
+        "{:#?}",
+        report.changes
+    );
+    assert_eq!(report.summary.byte_identical, 1, "sentinel.txt only");
+}
+
+#[test]
+fn a_failed_column_probe_makes_the_index_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (current, legacy) = mixed(tmp.path());
+    for (what, db) in [("current", current), ("legacy", legacy)] {
+        // Shadows the pragma_table_xinfo table-valued function, so the probe
+        // fails while the row query would still succeed.
+        let odd = altered_copy(
+            &db,
+            &format!("probe-{what}.db"),
+            "CREATE TABLE pragma_table_xinfo(x);",
+        );
+        let loaded = diff_input::load_index(&odd);
+        assert_eq!(
+            loaded.snapshot.info.state,
+            SnapshotState::Unavailable,
+            "{what}"
+        );
+        assert!(loaded.snapshot.entries.is_empty(), "{what}");
+        assert_eq!(codes(&loaded), vec![NoteCode::IndexUnreadable], "{what}");
+        assert!(
+            loaded.health.notes[0].detail.contains("pragma_table_xinfo"),
+            "{what}: the diagnostic was lost: {}",
+            loaded.health.notes[0].detail
+        );
+    }
+}
+
+#[test]
+fn a_surviving_raw_link_target_is_used_without_path_raw() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (current, _) = mixed(tmp.path());
+    let half = altered_copy(
+        &current,
+        "half.db",
+        "ALTER TABLE files DROP COLUMN path_raw;",
+    );
+    let loaded = diff_input::load_index(&half);
+    let link = entry(&loaded, b"link");
+    assert_eq!(link.link_target.as_deref(), Some(&b"t\xff"[..]));
+    assert_eq!(link.flags & LOSSY, 0, "an exact link target was flagged");
+    // The names themselves are lossy now.
+    assert_eq!(
+        loaded
+            .snapshot
+            .entries
+            .iter()
+            .filter(|e| e.flags & flags::LOSSY_PATH != 0)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn an_exact_move_beside_a_lossy_row_is_still_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let before = tar(
+        tmp.path(),
+        "before.tar",
+        &[
+            Member::File(b"d\xff", FIRST),
+            Member::File(b"old.txt", MOVED),
+        ],
+    );
+    let before = altered_copy(&index(&before), "before-legacy.db", LEGACY);
+    let after = tar(
+        tmp.path(),
+        "after.tar",
+        &[
+            Member::File(b"d\xff", FIRST),
+            Member::File(b"new.txt", MOVED),
+        ],
+    );
+    let after = index(&after);
+    let report = diff::compare(
+        &diff_input::load_index(&before).snapshot,
+        &diff_input::load_index(&after).snapshot,
+    )
+    .unwrap();
+    let moved = changes(&report, ChangeKind::Moved);
+    assert_eq!(moved.len(), 1, "{:#?}", report.changes);
+    assert_eq!(moved[0].before.as_ref().unwrap().path, "old.txt");
+    assert_eq!(moved[0].after.as_ref().unwrap().path, "new.txt");
+    assert_eq!(
+        lossy_reasons(&report),
+        2,
+        "the d\\xff rows stay inconclusive"
+    );
+}
+
+#[test]
+fn an_exact_row_written_after_a_sparse_wrapper_stays_a_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (old, source) = old_index(
+        tmp.path(),
+        "pre101-overwrite-pax10.db",
+        "legacy/overwrite-pax10.tar",
+    );
+    let read = members(&source);
+    let (plain, sentinel) = (&read[2].1, &read[1].1);
+    assert_eq!(stored_hash(&old, 3), *blake3::hash(plain).as_bytes());
+    let other = tar(
+        tmp.path(),
+        "other.tar",
+        &[
+            Member::File(b"plain-copy", plain),
+            Member::File(b"sentinel-copy", sentinel),
+        ],
+    );
+    let other = index(&other);
+    let loaded = build(&registry(&[(1, "old", &old), (2, "other", &other)])).unwrap();
+    // The plain holey.bin comes last, so it is what extraction leaves.
+    for content in [plain, sentinel] {
+        assert_eq!(
+            presence(&loaded, content, 1),
+            (Presence::Present { copies: 1 }, ReplicaCount::Exact(2))
+        );
+    }
+    // diff agrees: today's index of the same archive holds the same bytes
+    // at holey.bin.
+    let report = diff::compare(
+        &diff_input::load_index(&old).snapshot,
+        &diff_input::load_index(&index(&source)).snapshot,
+    )
+    .unwrap();
+    let holey = report
+        .changes
+        .iter()
+        .find(|c| c.before.as_ref().is_some_and(|b| b.path == "holey.bin"))
+        .unwrap();
+    assert_eq!(
+        holey.kind,
+        ChangeKind::ByteIdentical,
+        "{:#?}",
+        report.changes
+    );
+}
+
+#[test]
+fn move_inference_and_the_engine_agree_on_old_sparse_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (old, source) = old_index(tmp.path(), "pre101-pax10.db", "sparse/sparse-pax10.tar");
+    let read = members(&source);
+    // Every row after is hashed; the sentinel was renamed.
+    let after = tar(
+        tmp.path(),
+        "after.tar",
+        &[
+            Member::File(b"holey.bin", b"now an ordinary file"),
+            Member::File(b"renamed.txt", &read[1].1),
+        ],
+    );
+    let (old, now) = (
+        diff_input::load_index(&old),
+        diff_input::load_index(&index(&after)),
+    );
+    let moves = diff_input::MoveInference::of(&old.snapshot, &now.snapshot);
+    assert!(!moves.enabled, "{:?}", moves.blockers);
+    let report = diff::compare(&old.snapshot, &now.snapshot).unwrap();
+    assert_eq!(report.summary.moved, 0, "{:#?}", report.changes);
 }

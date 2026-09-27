@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{bail, Result};
 
+use crate::legacy;
 use crate::store::flags;
 
 /// How much of a source's content the caller could observe.
@@ -150,10 +151,11 @@ pub enum UnknownContentReason {
     /// tar-rs read, which need not be the logical file.
     PaxUnparsed,
     NotHashed,
-    /// A pre-v1.0.1 index recorded only a lossy rendering of the name
-    /// (#105): the row may be shadowed by, or shadow, another whose name
-    /// renders the same, so it is never counted as a copy.
-    LossyLegacyPath,
+    /// An older indexer did not record a name exactly (#105): this row's
+    /// own name is a lossy rendering, or a later row whose name is uncertain
+    /// could be at this row's path and overwrite it. Either way the row is
+    /// not known to be effective, so it is never counted as a copy.
+    LegacyNameUncertain,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +235,9 @@ impl UnknownRows {
 /// Flags under which a stored hash cannot prove a row's content: a read
 /// error cut the stream short, and unparsed pax records may hide sparse
 /// metadata, so the hash can cover condensed fragments (tests/sparse.rs).
+/// A pre-#63 sparse row ([`flags::LEGACY_SPARSE`], #105) needs no entry
+/// here: its name is uncertain too, so rule 3 already keeps it from being a
+/// copy, and as a `SPARSE` row its size is never trusted.
 const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED;
 
 /// A row's size when it is the content length: sparse, unparsed-PAX and
@@ -260,9 +265,11 @@ struct Building {
 ///    stored `SHADOWED` flag is ignored: v3 computed it on display text.
 /// 2. Effective files with a hash and neither a read error nor unparsed pax
 ///    records are copies of that content; the rest are unknown content.
-/// 3. A row whose name is only a lossy legacy rendering
-///    ([`flags::LOSSY_PATH`], #105) has no known key: it neither shadows nor
-///    is shadowed, and such a file is unknown content, never a copy.
+/// 3. A row whose name an older indexer did not record exactly (a lossy
+///    rendering or a sparse wrapper, [`crate::legacy`], #105) has no known
+///    key: it neither shadows nor is shadowed. Such a file is unknown
+///    content, never a copy, and so is an exact file that it could be at the
+///    path of and overwrite.
 /// 4. Hardlinks carry no bytes: an alias when an effective same-source copy
 ///    of their hash exists, otherwise an `UnmatchedHardlink` exclusion.
 ///    Symlinks are excluded.
@@ -304,7 +311,7 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
             if !file_ids.insert(row.file_id) {
                 bail!("coverage source {id} repeats file id {}", row.file_id);
             }
-            if row.flags & flags::LOSSY_PATH != 0 {
+            if legacy::name_uncertain(row.flags) {
                 continue;
             }
             let winner = latest.entry(&row.path_raw).or_insert(row.file_id);
@@ -316,11 +323,23 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
             path_raw: row.path_raw.clone(),
             file_id: row.file_id,
         };
+        // Each row whose name is uncertain, with the names it could have.
+        let uncertain: Vec<(i64, Vec<Vec<u8>>)> = source
+            .rows
+            .iter()
+            .filter(|r| legacy::name_uncertain(r.flags))
+            .map(|r| (r.file_id, legacy::candidates(&r.path_raw, r.flags)))
+            .collect();
+        let may_be_overwritten = |row: &CoverageRow| {
+            uncertain.iter().any(|(later, names)| {
+                *later > row.file_id && names.iter().any(|n| legacy::could_be(n, &row.path_raw))
+            })
+        };
         let mut unknown = UnknownRows::default();
         let mut hardlinks = Vec::new();
         for row in &source.rows {
-            let lossy = row.flags & flags::LOSSY_PATH != 0;
-            if !lossy && latest[row.path_raw.as_slice()] != row.file_id {
+            let name_uncertain = legacy::name_uncertain(row.flags);
+            if !name_uncertain && latest[row.path_raw.as_slice()] != row.file_id {
                 exclusions.push(Exclusion {
                     row: row_ref(row),
                     reason: ExclusionReason::Shadowed,
@@ -333,20 +352,24 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                     reason: ExclusionReason::Symlink,
                 }),
                 (EntryKind::Hardlink, _) => hardlinks.push(row),
-                (EntryKind::File, Some(hash)) if !lossy && row.flags & UNTRUSTED_HASH == 0 => {
+                (EntryKind::File, Some(hash))
+                    if row.flags & UNTRUSTED_HASH == 0
+                        && !name_uncertain
+                        && !may_be_overwritten(row) =>
+                {
                     let building = groups.entry(hash).or_default();
                     building.copies.entry(id).or_default().push(row_ref(row));
                     building.sizes.extend(trusted_size(row));
                 }
                 (EntryKind::File, _) => {
-                    let reason = if lossy {
-                        UnknownContentReason::LossyLegacyPath
-                    } else if row.flags & flags::READ_ERROR != 0 {
+                    let reason = if row.flags & flags::READ_ERROR != 0 {
                         UnknownContentReason::ReadError
                     } else if row.flags & flags::PAX_UNPARSED != 0 {
                         UnknownContentReason::PaxUnparsed
                     } else if row.flags & flags::SPARSE != 0 {
                         UnknownContentReason::UnsupportedSparse
+                    } else if name_uncertain || may_be_overwritten(row) {
+                        UnknownContentReason::LegacyNameUncertain
                     } else {
                         UnknownContentReason::NotHashed
                     };

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+use crate::legacy;
 use crate::report::to_hex;
 use crate::store::{flags, SCHEMA_VERSION};
 
@@ -109,9 +110,10 @@ pub enum Reason {
     OtherSnapshotIncomplete,
     IncompatibleSnapshots,
     ShadowedPath,
-    /// A pre-v1.0.1 index recorded only a lossy rendering of a name
-    /// involved, so which path it is cannot be established (#105).
-    LossyLegacyPath,
+    /// An older indexer did not record a name involved exactly: a lossy
+    /// rendering, or a sparse member's synthetic wrapper name. Which path it
+    /// is, or which path it overwrites, cannot be established (#105).
+    LegacyNameUncertain,
 }
 
 /// A report always includes raw bytes, even for valid UTF-8. The display path
@@ -204,7 +206,8 @@ fn compatible(info: &SnapshotInfo) -> bool {
 
 // The indexer's crafted PAX residual can hide sparse records and hash
 // condensed fragments instead of logical bytes (indexer.rs, #64).
-const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED;
+// A pre-#63 sparse row's hash may cover the condensed stream (#105).
+const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED | flags::LEGACY_SPARSE;
 
 fn trusted_hash(entry: &Entry) -> Option<[u8; 32]> {
     // v3 hardlink hashes were copied by display-name lookup, and link sizes
@@ -244,13 +247,45 @@ fn same_path(before: &Entry, after: &Entry) -> (ChangeKind, Reason) {
     }
 }
 
-fn lossy_path(entry: &Entry) -> bool {
-    entry.flags & flags::LOSSY_PATH != 0
+fn uncertain_name(entry: &Entry) -> bool {
+    legacy::name_uncertain(entry.flags)
 }
 
-/// The effective namespace, keyed on raw path bytes. A row whose name is
-/// only a lossy rendering (#105) has no known key: it neither shadows nor is
-/// shadowed, and [`compare`] reports it as inconclusive.
+/// What a snapshot's uncertain legacy names (#105) could stand for: each
+/// such row with the names it could really have.
+struct Uncertain(Vec<(i64, Vec<Vec<u8>>)>);
+
+impl Uncertain {
+    fn of(snapshot: &Snapshot) -> Self {
+        Self(
+            snapshot
+                .entries
+                .iter()
+                .filter(|e| uncertain_name(e))
+                .map(|e| (e.file_id, legacy::candidates(&e.path, e.flags)))
+                .collect(),
+        )
+    }
+
+    /// Whether some uncertain row could be at `path`.
+    fn could_hold(&self, path: &[u8]) -> bool {
+        self.0
+            .iter()
+            .any(|(_, names)| names.iter().any(|n| legacy::could_be(n, path)))
+    }
+
+    /// Whether a later uncertain row could be at `entry`'s path, and so
+    /// overwrite it on extraction.
+    fn may_shadow(&self, entry: &Entry) -> bool {
+        self.0.iter().any(|(id, names)| {
+            *id > entry.file_id && names.iter().any(|n| legacy::could_be(n, &entry.path))
+        })
+    }
+}
+
+/// The effective namespace, keyed on raw path bytes. A row whose name an
+/// older indexer did not record exactly (#105) has no known key: it neither
+/// shadows nor is shadowed, and [`compare`] reports it as inconclusive.
 fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
     let mut ids = BTreeSet::new();
     let mut paths: BTreeMap<&[u8], &Entry> = BTreeMap::new();
@@ -263,7 +298,7 @@ fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
             entry.file_id > 0 && ids.insert(entry.file_id),
             "invalid or duplicate file_id"
         );
-        if lossy_path(entry) {
+        if uncertain_name(entry) {
             continue;
         }
         let winner = paths.entry(entry.path.as_slice()).or_insert(entry);
@@ -280,7 +315,9 @@ fn excluded(snapshot: &Snapshot, side: Side, paths: &BTreeMap<&[u8], &Entry>) ->
     snapshot
         .entries
         .iter()
-        .filter(|entry| !lossy_path(entry) && paths[entry.path.as_slice()].file_id != entry.file_id)
+        .filter(|entry| {
+            !uncertain_name(entry) && paths[entry.path.as_slice()].file_id != entry.file_id
+        })
         .map(|entry| Excluded {
             side,
             reason: Reason::ShadowedPath,
@@ -352,18 +389,25 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
     let mut used_after = BTreeSet::new();
     let before_hashes = unique_hashes(before);
     let after_hashes = unique_hashes(after);
-    // A lossy legacy name (#105) could be any path that renders the same, so
-    // it stands in for every such path on its side: none of them can be
-    // shown absent there, or moved to or from.
-    let left_lossy = lossy_renderings(before);
-    let right_lossy = lossy_renderings(after);
-    let maybe_in = |renderings: &BTreeSet<Vec<u8>>, path: &[u8]| {
-        renderings.contains(String::from_utf8_lossy(path).as_bytes())
+    // An uncertain legacy name (#105) stands for every path it could be on
+    // its side: none of them can be shown absent there, or moved to or
+    // from, and a row it could overwrite is not known to be effective.
+    let left_u = Uncertain::of(before);
+    let right_u = Uncertain::of(after);
+    let uncertain = |before: Option<&Entry>, after: Option<&Entry>| {
+        change(
+            ChangeKind::Inconclusive,
+            Reason::LegacyNameUncertain,
+            before,
+            after,
+        )
     };
 
     for (path, old) in &left {
         if let Some(new) = right.get(path) {
-            let (kind, reason) = if is_compatible {
+            let (kind, reason) = if left_u.may_shadow(old) || right_u.may_shadow(new) {
+                (ChangeKind::Inconclusive, Reason::LegacyNameUncertain)
+            } else if is_compatible {
                 same_path(old, new)
             } else {
                 (ChangeKind::Inconclusive, Reason::IncompatibleSnapshots)
@@ -372,13 +416,8 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             used_after.insert(new.file_id);
             continue;
         }
-        if maybe_in(&right_lossy, path) {
-            changes.push(change(
-                ChangeKind::Inconclusive,
-                Reason::LossyLegacyPath,
-                Some(old),
-                None,
-            ));
+        if left_u.may_shadow(old) || right_u.could_hold(path) {
+            changes.push(uncertain(Some(old), None));
             continue;
         }
         let moved_to = trusted_hash(old).and_then(|hash| {
@@ -388,7 +427,8 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             }
             after_hashes.get(&hash).copied().filter(|new| {
                 !left.contains_key(new.path.as_slice())
-                    && !maybe_in(&left_lossy, &new.path)
+                    && !left_u.could_hold(&new.path)
+                    && !right_u.may_shadow(new)
                     && right
                         .get(new.path.as_slice())
                         .is_some_and(|e| e.file_id == new.file_id)
@@ -409,28 +449,18 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         }
     }
     for new in right.values().filter(|e| !used_after.contains(&e.file_id)) {
-        let (kind, reason) = if maybe_in(&left_lossy, &new.path) {
-            (ChangeKind::Inconclusive, Reason::LossyLegacyPath)
-        } else {
-            absence(&before.info, is_compatible, ChangeKind::Added)
-        };
+        if left_u.could_hold(&new.path) || right_u.may_shadow(new) {
+            changes.push(uncertain(None, Some(new)));
+            continue;
+        }
+        let (kind, reason) = absence(&before.info, is_compatible, ChangeKind::Added);
         changes.push(change(kind, reason, None, Some(new)));
     }
-    for old in before.entries.iter().filter(|e| lossy_path(e)) {
-        changes.push(change(
-            ChangeKind::Inconclusive,
-            Reason::LossyLegacyPath,
-            Some(old),
-            None,
-        ));
+    for old in before.entries.iter().filter(|e| uncertain_name(e)) {
+        changes.push(uncertain(Some(old), None));
     }
-    for new in after.entries.iter().filter(|e| lossy_path(e)) {
-        changes.push(change(
-            ChangeKind::Inconclusive,
-            Reason::LossyLegacyPath,
-            None,
-            Some(new),
-        ));
+    for new in after.entries.iter().filter(|e| uncertain_name(e)) {
+        changes.push(uncertain(None, Some(new)));
     }
     // Hex preserves byte lexicographic order. Anchor to the old path when
     // present, otherwise the new one; IDs make the key explicitly total.
@@ -480,16 +510,6 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         excluded,
         summary,
     })
-}
-
-/// The names of a snapshot's lossy legacy rows, as stored.
-fn lossy_renderings(snapshot: &Snapshot) -> BTreeSet<Vec<u8>> {
-    snapshot
-        .entries
-        .iter()
-        .filter(|e| lossy_path(e))
-        .map(|e| e.path.clone())
-        .collect()
 }
 
 fn absence(other: &SnapshotInfo, is_compatible: bool, kind: ChangeKind) -> (ChangeKind, Reason) {
