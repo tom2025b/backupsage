@@ -67,19 +67,26 @@ impl ProtectedSet {
         }
     }
 
-    /// An input file: protected by identity when it exists, by name always.
+    /// An input file: protected by identity when it exists, by name always,
+    /// under both the given spelling and the file it resolves to.
     pub fn add_input_file(&mut self, path: &Path) {
-        self.add_file(path);
-        self.reserve_name(path);
+        for spelling in spellings(path) {
+            self.add_file(&spelling);
+            self.reserve_name(&spelling);
+        }
     }
 
     /// An input SQLite database: the file and every sidecar SQLite may
     /// create beside it (`-wal`, `-shm`, `-journal`), by identity when
-    /// present and by name always.
+    /// present and by name always. SQLite names sidecars after the resolved
+    /// file, so a symlinked path reserves them beside its target too, as
+    /// the index reader checks them (`index_read::pending_sidecars`).
     pub fn add_input_db(&mut self, path: &Path) {
-        self.add_input_file(path);
-        for suffix in ["-wal", "-shm", "-journal"] {
-            self.add_input_file(&sidecar(path, suffix));
+        for spelling in spellings(path) {
+            self.add_input_file(&spelling);
+            for suffix in ["-wal", "-shm", "-journal"] {
+                self.add_input_file(&sidecar(&spelling, suffix));
+            }
         }
     }
 
@@ -151,6 +158,18 @@ impl ProtectedSet {
         }
         Ok(())
     }
+}
+
+/// The given spelling of `path`, plus the file it resolves to when that
+/// differs (a symlink, or a symlinked final component).
+fn spellings(path: &Path) -> Vec<PathBuf> {
+    let mut out = vec![path.to_path_buf()];
+    if let Ok(resolved) = fs::canonicalize(path) {
+        if resolved != path {
+            out.push(resolved);
+        }
+    }
+    out
 }
 
 /// `path` as an absolute name: its parent canonicalized when it exists,
