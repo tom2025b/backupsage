@@ -107,6 +107,11 @@ pub struct CoverageArgs {
     #[arg(long, value_name = "GLOB")]
     pub path_glob: Option<String>,
 
+    /// Only content of one kind: image, raw, video, text, binary.
+    /// Every copy still counts.
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+
     /// Restrict to these sources (id, label or index path); repeatable.
     #[arg(long = "archive", value_name = "ID_OR_LABEL")]
     pub archives: Vec<String>,

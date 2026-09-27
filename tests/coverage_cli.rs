@@ -28,6 +28,8 @@ use serde_json::Value;
 const MTIME: u64 = 1_700_000_001;
 const SHARED: &[u8] = b"shared bytes held by a, b and c";
 const RAW_SHARED: &[u8] = b"raw-named bytes held by a and c";
+/// Indexed as kind `binary` (a NUL byte), held by b and c.
+const BLOB: &[u8] = b"\x00\x01binary blob\x00";
 
 // ── Corpus construction ─────────────────────────────────────────────────────
 
@@ -129,15 +131,19 @@ fn corpus(dir: &Path) -> Corpus {
         .file(b"raw-\xff", RAW_SHARED)
         .file(b"empty.txt", b"")
         .link(tar::EntryType::Link, b"alias-of-empty", b"empty.txt")
+        // A later file id with an earlier name than alias-of-shared.
+        .link(tar::EntryType::Link, b"0-alias", b"shared.txt")
         .write(dir, "a.tar");
     let b_tar = Tar::default()
         .file(b"copy/shared.txt", SHARED)
         .file(b"b-\xfe.bin", b"only in b, raw name")
         .link(tar::EntryType::Symlink, b"a-sym", b"copy/shared.txt")
+        .file(b"blob.dat", BLOB)
         .write(dir, "b.tar");
     let c_dir = dir.join("c-dir");
     write_file(&c_dir.join("deep/shared.txt"), SHARED);
     write_file(&c_dir.join(OsStr::from_bytes(b"raw-\xff")), RAW_SHARED);
+    write_file(&c_dir.join("blob-copy.txt"), BLOB);
     let (a, b, c) = (index(&a_tar), index(&b_tar), index(&c_dir));
     Corpus {
         a_tar,
@@ -234,6 +240,8 @@ const FIXTURES: &[&str] = &[
     "filtered.json",
     "inconclusive.json",
     "inconclusive.txt",
+    "mixed.json",
+    "mixed.txt",
 ];
 
 fn golden(name: &str, actual: &str) {
@@ -476,10 +484,9 @@ fn clean_master_classifies_every_group_and_exits_0() {
         .map(|e| e["reason"].as_str().unwrap())
         .collect();
     assert_eq!(reasons, ["shadowed", "symlink", "symlink"]);
-    assert_eq!(
-        group_by_path(&doc, "shared.txt")["aliases"][0]["path"],
-        "alias-of-shared"
-    );
+    let aliases = &group_by_path(&doc, "shared.txt")["aliases"];
+    assert_eq!(aliases[0]["path"], "0-alias");
+    assert_eq!(aliases[1]["path"], "alias-of-shared");
     assert_eq!(doc["excluded_groups"][0]["reason"], "empty_content");
     assert_eq!(
         doc["excluded_groups"][0]["aliases"][0]["path"],
@@ -742,6 +749,53 @@ fn errors_exit_1_and_name_the_problem() {
     assert!(stderr(&out).contains("in use") || stderr(&out).contains("-wal"));
 }
 
+/// Below-floor and inconclusive groups interleave in content-hash order,
+/// and the terminal lists them in exactly the JSON's order.
+#[test]
+fn terminal_lists_groups_in_the_json_order_across_verdicts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = corpus(tmp.path());
+    // A complete source holding one unhashed 9-byte row: content of that
+    // length elsewhere cannot be ruled out there, so it is inconclusive;
+    // everything else in a is below the floor.
+    let e_tar = Tar::default()
+        .file(b"nine.bin", b"123456789")
+        .write(tmp.path(), "e.tar");
+    let e = index(&e_tar);
+    rusqlite::Connection::open(&e)
+        .unwrap()
+        .execute_batch("UPDATE files SET content_hash = NULL WHERE path = 'nine.bin'")
+        .unwrap();
+    let runner = |f: &[&str]| coverage_dbs(&[&c.a, &e], f);
+    let doc = check(tmp.path(), &runner, &[], "mixed.json", true, 2);
+
+    let listed: Vec<(String, String)> = doc["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["verdict"] != "meets_floor")
+        .map(|g| {
+            (
+                g["verdict"].as_str().unwrap().to_owned(),
+                g["content_hash"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    // The case matters only if an inconclusive group sorts before a
+    // below-floor one.
+    let first_inconclusive = listed.iter().position(|(v, _)| v == "inconclusive");
+    let last_below = listed.iter().rposition(|(v, _)| v == "below_floor");
+    assert!(first_inconclusive < last_below, "{listed:?}");
+
+    let text = stdout(&coverage_dbs(&[&c.a, &e], &[]));
+    let shown: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.split(" · ").find(|w| w.starts_with("b3:")))
+        .collect();
+    let want: Vec<&str> = listed.iter().map(|(_, h)| h.as_str()).collect();
+    assert_eq!(shown, want, "terminal order differs from JSON order");
+}
+
 // ── Scope filters ───────────────────────────────────────────────────────────
 
 #[test]
@@ -772,7 +826,11 @@ fn filters_choose_content_and_every_copy_still_counts() {
         .iter()
         .map(|g| g["copies"][0]["path"].as_str().unwrap())
         .collect();
-    assert_eq!(paths.len(), 2, "{paths:?}");
+    // blob-copy.txt is c's copy of b's blob.dat: reported, both counted.
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    let blob = group_by_path(&doc, "blob-copy.txt");
+    assert_eq!(blob["trusted_replicas"], 2);
+    assert_eq!(blob["copies"].as_array().unwrap().len(), 2);
     let shared = group_by_path(&doc, "shared.txt");
     assert_eq!(shared["copies"].as_array().unwrap().len(), 3);
     assert_eq!(shared["trusted_replicas"], 3);
@@ -830,8 +888,13 @@ fn a_path_filter_never_removes_a_copy_from_the_count() {
 // ── Ordering owned by the report ────────────────────────────────────────────
 
 fn report_json(sources: &[LoadedSource], reverse: bool) -> String {
+    // a-only.txt (9 bytes) and the empty content are both out of scope, and
+    // their hash order differs from their size order.
     let scope = CoverageScope {
-        floor: FloorParams::default(),
+        floor: FloorParams {
+            min_size: 10,
+            ..FloorParams::default()
+        },
         ..CoverageScope::default()
     };
     let loaded = coverage_input::LoadedCoverage {
@@ -869,18 +932,77 @@ fn report_json(sources: &[LoadedSource], reverse: bool) -> String {
 fn the_report_sorts_every_list_itself_whatever_order_it_is_handed() {
     let tmp = tempfile::tempdir().unwrap();
     let c = corpus(tmp.path());
-    let loaded = coverage_input::load_from_indexes(&[c.a, c.b, c.c]).unwrap();
+    // Unknown rows in two sources, whose path order is the reverse of their
+    // source order.
+    let e = index(
+        &Tar::default()
+            .pax(b"this is not a pax record at all")
+            .file(b"z-unknown", b"unknown bytes one")
+            .pax(b"this is not a pax record at all")
+            .file(b"y-unknown", b"unknown bytes two")
+            .write(tmp.path(), "e.tar"),
+    );
+    let f = index(
+        &Tar::default()
+            .pax(b"this is not a pax record at all")
+            .file(b"a-unknown", b"unknown bytes three")
+            .write(tmp.path(), "f.tar"),
+    );
+    let loaded = coverage_input::load_from_indexes(&[c.a, c.b, c.c, e, f]).unwrap();
     let straight = report_json(&loaded.sources, false);
     let doc: Value = serde_json::from_str(&straight).unwrap();
-    // The corpus exercises every list, so reversing each one matters.
-    for list in ["groups", "excluded_groups", "excluded_rows"] {
-        assert!(!doc[list].as_array().unwrap().is_empty(), "{list}");
+    // Every independently sorted list holds at least two entries, so
+    // reversing each one matters.
+    for list in [
+        "sources",
+        "groups",
+        "excluded_groups",
+        "excluded_rows",
+        "unknown_content",
+    ] {
+        assert!(doc[list].as_array().unwrap().len() >= 2, "{list}");
     }
-    assert!(doc["groups"].as_array().unwrap().iter().any(|g| g["copies"]
+    let most = |key: &str| {
+        doc["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g[key].as_array().unwrap().len())
+            .max()
+            .unwrap()
+    };
+    for key in ["copies", "aliases", "presence"] {
+        assert!(most(key) >= 2, "{key}");
+    }
+    let unknown: Vec<(i64, &str)> = doc["unknown_content"]
         .as_array()
         .unwrap()
-        .len()
-        > 1));
+        .iter()
+        .map(|u| {
+            (
+                u["source_id"].as_i64().unwrap(),
+                u["path"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        unknown,
+        [(4, "y-unknown"), (4, "z-unknown"), (5, "a-unknown")]
+    );
+    let excluded: Vec<Option<u64>> = doc["excluded_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["size"].as_u64())
+        .collect();
+    assert_eq!(excluded, [Some(9), Some(0)], "hash order, not size order");
+    let aliases: Vec<&str> = group_by_path(&doc, "shared.txt")["aliases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(aliases, ["0-alias", "alias-of-shared"]);
     assert_eq!(report_json(&loaded.sources, true), straight);
     assert_ordered(&doc, "library report");
 }
@@ -947,6 +1069,94 @@ fn output_file_goes_through_the_safety_boundary() {
         let before = fs::read(target).unwrap();
         let out = coverage_dbs(&dbs, &["-o", alias.to_str().unwrap()]);
         assert_eq!(code(&out), 1);
+        assert!(stderr(&out).contains("protected input"), "{}", stderr(&out));
         assert_eq!(fs::read(target).unwrap(), before);
     }
+}
+
+/// A missing input, or a sidecar SQLite has not created yet, is refused by
+/// name: nothing exists there for no-clobber to catch.
+#[test]
+fn output_never_takes_the_name_of_an_input_even_a_missing_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = corpus(tmp.path());
+    let refused = |out: Output, dest: &Path, what: &str| {
+        assert_eq!(code(&out), 1, "{what}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("protected input"),
+            "{what}: refused for another reason: {}",
+            stderr(&out)
+        );
+        assert!(!dest.exists(), "{what}: created {}", dest.display());
+    };
+
+    let missing = tmp.path().join("missing.db");
+    let out = coverage_dbs(&[&missing], &["--json", "-o", missing.to_str().unwrap()]);
+    refused(out, &missing, "missing index");
+
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut name = c.a.clone().into_os_string();
+        name.push(suffix);
+        let dest = PathBuf::from(name);
+        let out = coverage_dbs(&[&c.a, &c.b], &["-o", dest.to_str().unwrap()]);
+        refused(out, &dest, suffix);
+    }
+
+    // b's archive is unplugged; its recorded path stays reserved.
+    fs::remove_file(&c.b_tar).unwrap();
+    let out = coverage_dbs(&[&c.a, &c.b], &["-o", c.b_tar.to_str().unwrap()]);
+    refused(out, &c.b_tar, "missing archive");
+
+    // Another spelling of the same name is the same name.
+    let alias = tmp.path().join("sub/../b.tar");
+    fs::create_dir_all(tmp.path().join("sub")).unwrap();
+    let out = coverage_dbs(&[&c.a, &c.b], &["-o", alias.to_str().unwrap()]);
+    refused(out, &c.b_tar, "missing archive, other spelling");
+
+    let master = master_with(tmp.path(), "master.db", &[&c.a]);
+    let journal = tmp.path().join("master.db-journal");
+    let out = coverage_master(&master, &["-o", journal.to_str().unwrap()]);
+    refused(out, &journal, "master journal");
+}
+
+#[test]
+fn kind_filter_matches_dedup_and_every_copy_still_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = corpus(tmp.path());
+    let dbs = [c.a.as_path(), c.b.as_path(), c.c.as_path()];
+    let doc = json(&coverage_dbs(&dbs, &["--kind", "binary", "--json"]));
+    assert_eq!(doc["params"]["kind"], "binary");
+    assert_eq!(doc["summary"]["groups"], 1);
+    let blob = group_by_path(&doc, "blob.dat");
+    assert_eq!(blob["verdict"], "meets_floor");
+    assert_eq!(blob["copies"].as_array().unwrap().len(), 2);
+    assert_totals(&doc, "kind binary");
+    // Every text group, and no binary one.
+    let doc = json(&coverage_dbs(&dbs, &["--kind", "text", "--json"]));
+    assert!(doc["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|g| g["copies"][0]["path"] != "blob.dat"));
+    assert_eq!(doc["summary"]["groups"], 5);
+    // Filters combine on the same row, as dedup's WHERE clause does.
+    let doc = json(&coverage_dbs(
+        &dbs,
+        &["--kind", "binary", "--ext", "dat", "--json"],
+    ));
+    assert_eq!(doc["summary"]["groups"], 1);
+    let doc = json(&coverage_dbs(
+        &dbs,
+        &["--kind", "binary", "--ext", "jpg", "--json"],
+    ));
+    assert_eq!(doc["summary"]["groups"], 0);
+    // A misspelt kind is refused, not reported as complete coverage of
+    // nothing.
+    let out = coverage_dbs(&dbs, &["--kind", "binery"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("unknown --kind 'binery'"),
+        "{}",
+        stderr(&out)
+    );
 }

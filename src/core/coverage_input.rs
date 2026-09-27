@@ -88,6 +88,8 @@ pub struct LoadedSource {
     pub index_notes: Vec<InputNote>,
     pub notes: Vec<LoadNote>,
     pub rows: Vec<CoverageRow>,
+    /// Each row's content kind, by file id, as the index recorded it.
+    pub kinds: BTreeMap<i64, String>,
 }
 
 /// Every source, in source-id order.
@@ -471,6 +473,7 @@ fn map_source(
         SnapshotState::Incompatible | SnapshotState::Unavailable => SourceEvidence::Unavailable,
     };
     let mut rows = Vec::new();
+    let mut kinds = BTreeMap::new();
     if evidence != SourceEvidence::Unavailable {
         for e in &snapshot.entries {
             let entry_kind = match e.entry_type {
@@ -489,6 +492,9 @@ fn map_source(
                     break;
                 }
             };
+            if let Some(kind) = &e.kind {
+                kinds.insert(e.file_id, kind.clone());
+            }
             rows.push(CoverageRow {
                 file_id: e.file_id,
                 path_raw: e.path.clone(),
@@ -514,6 +520,7 @@ fn map_source(
     }
     if evidence == SourceEvidence::Unavailable {
         rows.clear();
+        kinds.clear();
     }
     // Rows stay proof of a copy only when the source was positively shown
     // present and readable now. Anything else (unplugged, denied, never
@@ -587,5 +594,6 @@ fn map_source(
         index_notes: health.notes,
         notes,
         rows,
+        kinds,
     }
 }

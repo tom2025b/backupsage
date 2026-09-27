@@ -56,6 +56,10 @@ pub struct Entry {
     pub mode: Option<u32>,
     pub content_hash: Option<[u8; 32]>,
     pub flags: i64,
+    /// The indexer's content kind (`text`, `image`, `raw`, `video`,
+    /// `binary`, `link`, `empty`). Not compared by the diff engine; the
+    /// coverage report filters on it like `dedup --kind`.
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

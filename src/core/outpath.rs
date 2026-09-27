@@ -35,6 +35,8 @@ pub fn file_id(path: &Path) -> Option<FileId> {
 pub struct ProtectedSet {
     files: Vec<(FileId, PathBuf)>,
     dirs: Vec<PathBuf>,
+    /// Normalized names reserved whether or not anything exists there.
+    names: Vec<(PathBuf, PathBuf)>,
 }
 
 impl ProtectedSet {
@@ -54,6 +56,31 @@ impl ProtectedSet {
         self.add_file(path);
         self.add_file(&sidecar(path, "-wal"));
         self.add_file(&sidecar(path, "-shm"));
+    }
+
+    /// Reserve the name `path` even when nothing exists there now: an input
+    /// that is missing today (an unplugged archive, a lost index, a sidecar
+    /// SQLite has not created yet) must still never become an output.
+    pub fn reserve_name(&mut self, path: &Path) {
+        if let Some(normalized) = normalize_name(path) {
+            self.names.push((normalized, path.to_path_buf()));
+        }
+    }
+
+    /// An input file: protected by identity when it exists, by name always.
+    pub fn add_input_file(&mut self, path: &Path) {
+        self.add_file(path);
+        self.reserve_name(path);
+    }
+
+    /// An input SQLite database: the file and every sidecar SQLite may
+    /// create beside it (`-wal`, `-shm`, `-journal`), by identity when
+    /// present and by name always.
+    pub fn add_input_db(&mut self, path: &Path) {
+        self.add_input_file(path);
+        for suffix in ["-wal", "-shm", "-journal"] {
+            self.add_input_file(&sidecar(path, suffix));
+        }
     }
 
     /// Protect an entire directory tree.
@@ -97,6 +124,13 @@ impl ProtectedSet {
             format!("output directory '{}' is not accessible", parent.display())
         })?;
         let resolved = canon_parent.join(name);
+        if let Some((_, hit)) = self.names.iter().find(|(n, _)| *n == resolved) {
+            bail!(
+                "output '{}' is the name of protected input '{}'",
+                dest.display(),
+                hit.display()
+            );
+        }
         if let Some(id) = file_id(&resolved) {
             if let Some((_, hit)) = self.files.iter().find(|(fid, _)| *fid == id) {
                 bail!(
@@ -117,6 +151,33 @@ impl ProtectedSet {
         }
         Ok(())
     }
+}
+
+/// `path` as an absolute name: its parent canonicalized when it exists,
+/// otherwise normalized lexically, so `sub/../x` and symlinked directories
+/// name the same entry as the destination check sees.
+fn normalize_name(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let parent = absolute.parent()?;
+    let parent = parent.canonicalize().unwrap_or_else(|_| {
+        let mut out = PathBuf::new();
+        for part in parent.components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => out.push(other),
+            }
+        }
+        out
+    });
+    Some(parent.join(name))
 }
 
 /// SQLite sidecar naming: `x.db` → `x.db-wal` / `x.db-shm`.

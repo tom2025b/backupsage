@@ -188,7 +188,7 @@ fn read_index(
 fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
     let mut stmt = conn.prepare(
         "SELECT id, path, path_raw, entry_type, link_target, link_target_raw,
-                size, mtime_unix, mode, content_hash, flags
+                size, mtime_unix, mode, content_hash, flags, kind
          FROM files ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
@@ -223,6 +223,7 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
                 .map(|h| <[u8; 32]>::try_from(h.as_slice()).map_err(|_| malformed("content_hash")))
                 .transpose()?,
             flags: row.get(10)?,
+            kind: row.get(11)?,
         });
         if entries.len() == 1 {
             run_mid_read_hook(ReadPoint::BetweenRows);

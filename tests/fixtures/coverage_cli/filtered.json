@@ -10,6 +10,7 @@
       "txt"
     ],
     "path_glob": null,
+    "kind": null,
     "archives": null,
     "protected": [
       3
@@ -28,7 +29,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 9,
+      "rows": 10,
       "index_notes": [
         {
           "code": "source_stat_matches",
@@ -49,7 +50,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 3,
+      "rows": 4,
       "index_notes": [
         {
           "code": "source_stat_matches",
@@ -70,7 +71,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": true,
-      "rows": 2,
+      "rows": 3,
       "index_notes": [
         {
           "code": "source_directory_unverified",
@@ -81,6 +82,66 @@
     }
   ],
   "groups": [
+    {
+      "content_hash": "b3:05c69b9630337a40c7fb3cf1a02ac1aeb8d0ff7591aaf0214940c7cb934c7a58",
+      "size": 14,
+      "verdict": "meets_floor",
+      "only_copy": false,
+      "replicas": {
+        "observed": 2,
+        "exact": true
+      },
+      "trusted_replicas": 2,
+      "untrusted_replicas": 0,
+      "protected_replicas": 1,
+      "unknown_sources": 0,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 2,
+          "label": "b.tar.db",
+          "path": "blob.dat",
+          "path_bytes": "626c6f622e646174",
+          "file_id": 4,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        },
+        {
+          "source_id": 3,
+          "label": "c-dir.db",
+          "path": "blob-copy.txt",
+          "path_bytes": "626c6f622d636f70792e747874",
+          "file_id": 1,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": true
+        }
+      ],
+      "aliases": []
+    },
     {
       "content_hash": "b3:6c041a4c22becf32be0b91f3f5ae51ffa9aebd4071e3cd2218f46e2df18facf0",
       "size": 31,
@@ -143,13 +204,19 @@
           "label": "c-dir.db",
           "path": "deep/shared.txt",
           "path_bytes": "646565702f7368617265642e747874",
-          "file_id": 1,
+          "file_id": 2,
           "status": "ok",
           "counts_toward_floor": true,
           "protected": true
         }
       ],
       "aliases": [
+        {
+          "source_id": 1,
+          "path": "0-alias",
+          "path_bytes": "302d616c696173",
+          "file_id": 10
+        },
         {
           "source_id": 1,
           "path": "alias-of-shared",
@@ -268,17 +335,17 @@
     "min_copies": 2,
     "sources": 3,
     "sources_degraded": 0,
-    "groups": 2,
-    "meets_floor": 1,
+    "groups": 3,
+    "meets_floor": 2,
     "below_floor": 1,
     "inconclusive": 0,
     "only_copy": 1,
-    "protected_replicas": 1,
+    "protected_replicas": 2,
     "excluded_groups": 2,
     "unknown_content_rows": 0,
     "shadowed_rows": 1,
     "symlink_rows": 0,
     "unmatched_hardlink_rows": 0,
-    "hardlink_aliases": 2
+    "hardlink_aliases": 3
   }
 }

@@ -298,6 +298,7 @@ fn run() -> Result<i32> {
                 },
                 exts: args.ext.clone(),
                 path_glob: args.path_glob.clone(),
+                kind: args.kind.clone(),
             };
             let input = if args.dbs.is_empty() {
                 CoverageInput::Master(&master_path)
@@ -315,18 +316,22 @@ fn run() -> Result<i32> {
                     // Everything coverage read is protected from the report
                     // write: the master and every index (with sidecars), and
                     // every source archive or directory tree (ADR 0001).
+                    // Names are reserved even when nothing exists there: a
+                    // missing index or archive, or a sidecar SQLite has not
+                    // created yet, must never become the report.
                     let mut protected = backupsage::outpath::ProtectedSet::new();
                     if args.dbs.is_empty() {
-                        protected.add_db(&master_path);
+                        protected.add_input_db(&master_path);
                     }
                     for s in &run.loaded.sources {
-                        protected.add_db(&s.db_path);
+                        protected.add_input_db(&s.db_path);
                         if let Some(source) = &s.source {
                             let source = std::path::Path::new(source);
                             if s.source_type.as_deref() == Some("dir") {
+                                protected.reserve_name(source);
                                 protected.add_dir_tree(source);
                             } else {
-                                protected.add_file(source);
+                                protected.add_input_file(source);
                             }
                         }
                     }
@@ -1072,21 +1077,37 @@ fn render_coverage(r: &backupsage::coverage_report::CoverageReport) -> String {
     if let Some(glob) = &p.path_glob {
         scope.push(format!("path glob {}", sanitize(glob)));
     }
+    if let Some(kind) = &p.kind {
+        scope.push(format!("kind {}", sanitize(kind)));
+    }
     let _ = writeln!(out, "{}", scope.join(" · "));
     let _ = writeln!(out, "coverage: {}", r.coverage_state);
 
-    for (verdict, title) in [
-        ("below_floor", "below the floor"),
-        ("inconclusive", "inconclusive"),
-    ] {
-        let listed: Vec<_> = r.groups.iter().filter(|g| g.verdict == verdict).collect();
-        if listed.is_empty() {
-            continue;
-        }
+    // One list, in the report's own order (content hash), each group
+    // carrying its verdict: the terminal never reorders what the JSON
+    // orders.
+    let listed: Vec<_> = r
+        .groups
+        .iter()
+        .filter(|g| g.verdict != "meets_floor")
+        .collect();
+    if !listed.is_empty() {
         let _ = writeln!(out);
-        let _ = writeln!(out, "{title} ({}):", listed.len());
+        let _ = writeln!(
+            out,
+            "not meeting the floor ({}: {} below the floor · {} inconclusive):",
+            listed.len(),
+            r.summary.below_floor,
+            r.summary.inconclusive
+        );
         for g in listed {
+            let verdict = if g.verdict == "below_floor" {
+                "below floor"
+            } else {
+                "inconclusive"
+            };
             let mut facts = vec![
+                verdict.to_string(),
                 g.content_hash.clone(),
                 g.size
                     .map(human_bytes)

@@ -8,6 +8,7 @@
     "include_empty": false,
     "exts": [],
     "path_glob": null,
+    "kind": null,
     "archives": null,
     "protected": []
   },
@@ -24,7 +25,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 9,
+      "rows": 10,
       "index_notes": [
         {
           "code": "source_stat_matches",
@@ -45,7 +46,7 @@
       "status": "archive-missing",
       "counts_toward_floor": false,
       "protected": false,
-      "rows": 3,
+      "rows": 4,
       "index_notes": [
         {
           "code": "source_offline",
@@ -71,7 +72,7 @@
       "status": "ok",
       "counts_toward_floor": true,
       "protected": false,
-      "rows": 2,
+      "rows": 3,
       "index_notes": [
         {
           "code": "source_directory_unverified",
@@ -124,6 +125,80 @@
     }
   ],
   "groups": [
+    {
+      "content_hash": "b3:05c69b9630337a40c7fb3cf1a02ac1aeb8d0ff7591aaf0214940c7cb934c7a58",
+      "size": 14,
+      "verdict": "inconclusive",
+      "only_copy": false,
+      "replicas": {
+        "observed": 1,
+        "exact": false
+      },
+      "trusted_replicas": 1,
+      "untrusted_replicas": 0,
+      "protected_replicas": 0,
+      "unknown_sources": 3,
+      "presence": [
+        {
+          "source_id": 1,
+          "state": "absent",
+          "copies": null,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 2,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unreachable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 3,
+          "state": "present",
+          "copies": 1,
+          "reason": null,
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 4,
+          "state": "unknown",
+          "copies": null,
+          "reason": "source_unavailable",
+          "unhashed_rows": null
+        },
+        {
+          "source_id": 5,
+          "state": "unknown",
+          "copies": null,
+          "reason": "unhashed_rows_may_match",
+          "unhashed_rows": 1
+        }
+      ],
+      "copies": [
+        {
+          "source_id": 2,
+          "label": "b.tar",
+          "path": "blob.dat",
+          "path_bytes": "626c6f622e646174",
+          "file_id": 4,
+          "status": "archive-missing",
+          "counts_toward_floor": false,
+          "protected": false
+        },
+        {
+          "source_id": 3,
+          "label": "c-dir",
+          "path": "blob-copy.txt",
+          "path_bytes": "626c6f622d636f70792e747874",
+          "file_id": 1,
+          "status": "ok",
+          "counts_toward_floor": true,
+          "protected": false
+        }
+      ],
+      "aliases": []
+    },
     {
       "content_hash": "b3:51eeb1cbc4bc160313ef1e9b4e3415d9946fddb5dac4a9f5170a0ba4519db0c5",
       "size": 9,
@@ -264,13 +339,19 @@
           "label": "c-dir",
           "path": "deep/shared.txt",
           "path_bytes": "646565702f7368617265642e747874",
-          "file_id": 1,
+          "file_id": 2,
           "status": "ok",
           "counts_toward_floor": true,
           "protected": false
         }
       ],
       "aliases": [
+        {
+          "source_id": 1,
+          "path": "0-alias",
+          "path_bytes": "302d616c696173",
+          "file_id": 10
+        },
         {
           "source_id": 1,
           "path": "alias-of-shared",
@@ -345,7 +426,7 @@
           "label": "c-dir",
           "path": "raw-�",
           "path_bytes": "7261772dff",
-          "file_id": 2,
+          "file_id": 3,
           "status": "ok",
           "counts_toward_floor": true,
           "protected": false
@@ -546,10 +627,10 @@
     "min_copies": 2,
     "sources": 5,
     "sources_degraded": 2,
-    "groups": 5,
+    "groups": 6,
     "meets_floor": 2,
     "below_floor": 0,
-    "inconclusive": 3,
+    "inconclusive": 4,
     "only_copy": 0,
     "protected_replicas": 0,
     "excluded_groups": 1,
@@ -557,6 +638,6 @@
     "shadowed_rows": 1,
     "symlink_rows": 2,
     "unmatched_hardlink_rows": 0,
-    "hardlink_aliases": 2
+    "hardlink_aliases": 3
   }
 }

@@ -39,7 +39,12 @@ pub struct CoverageScope {
     pub exts: Vec<String>,
     /// SQLite GLOB over the display path, like `dedup --path-glob`.
     pub path_glob: Option<String>,
+    /// One content kind, like `dedup --kind`.
+    pub kind: Option<String>,
 }
+
+/// The kinds `--kind` accepts: dedup's documented set.
+pub const KINDS: [&str; 5] = ["image", "raw", "video", "text", "binary"];
 
 /// Resolve `--archive`/`--protected` values (source id, label or index
 /// path) to source ids. Each value must name exactly one source.
@@ -81,15 +86,38 @@ pub fn select(registry: Vec<RegistrySource>, ids: &[i64]) -> Vec<RegistrySource>
         .collect()
 }
 
-/// `--ext` and `--path-glob`, evaluated with dedup's own semantics.
+/// `--kind`, `--ext` and `--path-glob`, evaluated with dedup's own
+/// semantics.
 struct PathFilter {
     /// Lowercased, alphanumeric-only suffixes, as dedup cleans them.
     exts: Vec<String>,
     glob: Option<(Connection, String)>,
+    /// The wanted kind, and every row's kind by (source id, file id).
+    kind: Option<(String, BTreeMap<(i64, i64), String>)>,
 }
 
 impl PathFilter {
-    fn new(scope: &CoverageScope) -> Result<Self> {
+    fn new(scope: &CoverageScope, sources: &[LoadedSource]) -> Result<Self> {
+        // dedup matches `f.kind = ?` and so silently finds nothing for a
+        // misspelt kind; here that would read as complete coverage of
+        // nothing, so an unknown kind is refused.
+        let kind = match &scope.kind {
+            Some(k) if !KINDS.contains(&k.as_str()) => {
+                bail!("unknown --kind '{k}' (use {})", KINDS.join(", "))
+            }
+            Some(k) => {
+                let kinds = sources
+                    .iter()
+                    .flat_map(|s| {
+                        s.kinds
+                            .iter()
+                            .map(|(&file_id, kind)| ((s.source_id, file_id), kind.clone()))
+                    })
+                    .collect();
+                Some((k.clone(), kinds))
+            }
+            None => None,
+        };
         let exts = scope
             .exts
             .iter()
@@ -106,14 +134,20 @@ impl PathFilter {
             Some(g) => Some((Connection::open_in_memory()?, g.clone())),
             None => None,
         };
-        Ok(PathFilter { exts, glob })
+        Ok(PathFilter { exts, glob, kind })
     }
 
     fn is_active(&self) -> bool {
-        !self.exts.is_empty() || self.glob.is_some()
+        !self.exts.is_empty() || self.glob.is_some() || self.kind.is_some()
     }
 
     fn matches(&self, row: &RowRef) -> Result<bool> {
+        if let Some((want, kinds)) = &self.kind {
+            // dedup: f.kind = ?. A row with no recorded kind never matches.
+            if kinds.get(&(row.source_id, row.file_id)) != Some(want) {
+                return Ok(false);
+            }
+        }
         if !self.exts.is_empty() {
             // dedup: lower(path) LIKE '%.ext'. SQLite's lower() and LIKE fold
             // ASCII only, and the suffix is ASCII.
@@ -224,6 +258,7 @@ pub struct ReportParams {
     pub include_empty: bool,
     pub exts: Vec<String>,
     pub path_glob: Option<String>,
+    pub kind: Option<String>,
     /// The chosen source ids, or null for every source.
     pub archives: Option<Vec<i64>>,
     pub protected: Vec<i64>,
@@ -380,7 +415,7 @@ pub fn build_report(
     archives: Option<Vec<i64>>,
     protected: &[i64],
 ) -> Result<CoverageReport> {
-    let filter = PathFilter::new(scope)?;
+    let filter = PathFilter::new(scope, sources)?;
     let is_protected = |id: i64| protected.contains(&id);
 
     let mut report_sources: Vec<ReportSource> = sources
@@ -545,6 +580,7 @@ pub fn build_report(
             include_empty: scope.floor.include_empty,
             exts: scope.exts.clone(),
             path_glob: scope.path_glob.clone(),
+            kind: scope.kind.clone(),
             archives,
             protected: protected.to_vec(),
         },
