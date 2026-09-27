@@ -44,13 +44,6 @@ pub mod flags {
     pub const LOSSY_PATH: i64 = 1 << 20;
     /// Reader-only, never written (#105): the same for the link target.
     pub const LOSSY_LINK_TARGET: i64 = 1 << 21;
-    /// Reader-only, never written (#105): a `SPARSE` row from an indexer
-    /// before #63, which hashed the condensed stream tar-rs yields for PAX
-    /// sparse members, stored its condensed size, and kept the synthetic
-    /// `GNUSparseFile.<pid>` name for 0.1/1.0. Neither the hash, the size nor
-    /// the name may be trusted. Old-GNU rows are marked too: the row alone
-    /// cannot tell the dialects apart.
-    pub const LEGACY_SPARSE: i64 = 1 << 22;
 }
 
 /// Static description of the source being indexed, written into `meta`.

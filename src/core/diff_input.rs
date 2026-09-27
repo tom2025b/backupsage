@@ -171,7 +171,8 @@ fn read_index(
     // incompatible with no rows rather than guessed at.
     run_mid_read_hook(ReadPoint::BetweenStatements);
     // The `content_mode` key arrived with #70, which already carried #63's
-    // sparse handling; an index without it may hold condensed sparse rows.
+    // sparse handling; an index without it may hold condensed sparse rows
+    // under names that are not their real ones.
     let old_sparse_writer = health.content_mode.is_none();
     let (entries, legacy) = if info.schema_version == Some(SCHEMA_VERSION) {
         read_rows(&conn, old_sparse_writer).map_err(|e| read_note(&e))?
@@ -189,13 +190,15 @@ fn read_index(
             ),
         ));
     }
+    // Refused, like an unknown entry type: nothing here can recover what
+    // the old indexer never recorded (#105).
     if legacy.sparse > 0 {
-        notes.push(note(
-            NoteCode::LegacySparseRows,
+        return Err(note(
+            NoteCode::LegacySparseIndex,
             format!(
-                "{} sparse row(s) come from an indexer older than #63, which hashed the \
-                 condensed stream, stored its size and could keep a synthetic \
-                 GNUSparseFile name; their hash, size and name are never trusted",
+                "written before sparse members were handled (#63): {} sparse row(s) \
+                 carry the hash and size of the condensed stream, and their real names \
+                 (GNU.sparse.name) were never recorded; re-index this archive",
                 legacy.sparse
             ),
         ));
@@ -212,7 +215,7 @@ fn read_index(
 struct LegacyRows {
     /// Name or link target stored only as a lossy rendering.
     lossy: usize,
-    /// Sparse rows from before #63's sparse handling.
+    /// Sparse rows from an indexer before #63's sparse handling.
     sparse: usize,
 }
 
@@ -242,8 +245,9 @@ fn files_column(conn: &Connection, col: &str) -> rusqlite::Result<bool> {
 ///   told apart): [`flags::LOSSY_PATH`] / [`flags::LOSSY_LINK_TARGET`].
 ///   Every other legacy name is exactly its UTF-8 bytes.
 /// - An index from before #63 (`old_sparse_writer`) hashed PAX-sparse
-///   members' condensed stream: its `SPARSE` rows get
-///   [`flags::LEGACY_SPARSE`].
+///   members' condensed stream, stored its size, and kept tar-rs's name
+///   instead of the real one (`GNU.sparse.name`, which can be anything). Its
+///   `SPARSE` rows are counted, and the caller refuses the index.
 fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, LegacyRows)> {
     let raw_path = files_column(conn, "path_raw")?;
     let raw_target = files_column(conn, "link_target_raw")?;
@@ -285,7 +289,6 @@ fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, 
             legacy.lossy += 1;
         }
         if old_sparse_writer && row_flags & flags::SPARSE != 0 {
-            row_flags |= flags::LEGACY_SPARSE;
             legacy.sparse += 1;
         }
         let malformed = |what: &str| anyhow!("malformed {what} on files row {file_id}");
@@ -451,9 +454,6 @@ fn row_blocker(entry: &Entry) -> Option<MoveBlockerCause> {
         EntryType::Unsupported => MoveBlockerCause::UnsupportedEntryType,
         EntryType::File if entry.flags & flags::READ_ERROR != 0 => MoveBlockerCause::ReadError,
         EntryType::File if entry.flags & flags::PAX_UNPARSED != 0 => MoveBlockerCause::PaxUnparsed,
-        EntryType::File if entry.flags & flags::LEGACY_SPARSE != 0 => {
-            MoveBlockerCause::UnsupportedSparse
-        }
         EntryType::File if entry.content_hash.is_some() => return None,
         EntryType::File if entry.flags & flags::SPARSE != 0 => MoveBlockerCause::UnsupportedSparse,
         EntryType::File => MoveBlockerCause::NotHashed,

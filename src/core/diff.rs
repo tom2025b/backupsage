@@ -110,9 +110,8 @@ pub enum Reason {
     OtherSnapshotIncomplete,
     IncompatibleSnapshots,
     ShadowedPath,
-    /// An older indexer did not record a name involved exactly: a lossy
-    /// rendering, or a sparse member's synthetic wrapper name. Which path it
-    /// is, or which path it overwrites, cannot be established (#105).
+    /// A pre-v1.0.1 index recorded only a lossy rendering of a name
+    /// involved, so which path it is cannot be established (#105).
     LegacyNameUncertain,
 }
 
@@ -206,8 +205,7 @@ fn compatible(info: &SnapshotInfo) -> bool {
 
 // The indexer's crafted PAX residual can hide sparse records and hash
 // condensed fragments instead of logical bytes (indexer.rs, #64).
-// A pre-#63 sparse row's hash may cover the condensed stream (#105).
-const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED | flags::LEGACY_SPARSE;
+const UNTRUSTED_HASH: i64 = flags::READ_ERROR | flags::PAX_UNPARSED;
 
 fn trusted_hash(entry: &Entry) -> Option<[u8; 32]> {
     // v3 hardlink hashes were copied by display-name lookup, and link sizes
@@ -251,9 +249,8 @@ fn uncertain_name(entry: &Entry) -> bool {
     legacy::name_uncertain(entry.flags)
 }
 
-/// What a snapshot's uncertain legacy names (#105) could stand for: each
-/// such row with the names it could really have.
-struct Uncertain(Vec<(i64, Vec<Vec<u8>>)>);
+/// The stored names of a snapshot's lossy legacy rows (#105).
+struct Uncertain(BTreeSet<Vec<u8>>);
 
 impl Uncertain {
     fn of(snapshot: &Snapshot) -> Self {
@@ -262,24 +259,14 @@ impl Uncertain {
                 .entries
                 .iter()
                 .filter(|e| uncertain_name(e))
-                .map(|e| (e.file_id, legacy::candidates(&e.path, e.flags)))
+                .map(|e| e.path.clone())
                 .collect(),
         )
     }
 
-    /// Whether some uncertain row could be at `path`.
+    /// Whether some lossy row could be at `path`.
     fn could_hold(&self, path: &[u8]) -> bool {
-        self.0
-            .iter()
-            .any(|(_, names)| names.iter().any(|n| legacy::could_be(n, path)))
-    }
-
-    /// Whether a later uncertain row could be at `entry`'s path, and so
-    /// overwrite it on extraction.
-    fn may_shadow(&self, entry: &Entry) -> bool {
-        self.0.iter().any(|(id, names)| {
-            *id > entry.file_id && names.iter().any(|n| legacy::could_be(n, &entry.path))
-        })
+        self.0.iter().any(|stored| legacy::could_be(stored, path))
     }
 }
 
@@ -389,9 +376,10 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
     let mut used_after = BTreeSet::new();
     let before_hashes = unique_hashes(before);
     let after_hashes = unique_hashes(after);
-    // An uncertain legacy name (#105) stands for every path it could be on
-    // its side: none of them can be shown absent there, or moved to or
-    // from, and a row it could overwrite is not known to be effective.
+    // A lossy legacy name (#105) stands for every path that renders the same
+    // on its side: none of them can be shown absent there, or moved to or
+    // from. (An exact name in such an index is valid UTF-8 without U+FFFD,
+    // so it never renders like a lossy one and nothing it holds is hidden.)
     let left_u = Uncertain::of(before);
     let right_u = Uncertain::of(after);
     let uncertain = |before: Option<&Entry>, after: Option<&Entry>| {
@@ -405,9 +393,7 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
 
     for (path, old) in &left {
         if let Some(new) = right.get(path) {
-            let (kind, reason) = if left_u.may_shadow(old) || right_u.may_shadow(new) {
-                (ChangeKind::Inconclusive, Reason::LegacyNameUncertain)
-            } else if is_compatible {
+            let (kind, reason) = if is_compatible {
                 same_path(old, new)
             } else {
                 (ChangeKind::Inconclusive, Reason::IncompatibleSnapshots)
@@ -416,7 +402,7 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             used_after.insert(new.file_id);
             continue;
         }
-        if left_u.may_shadow(old) || right_u.could_hold(path) {
+        if right_u.could_hold(path) {
             changes.push(uncertain(Some(old), None));
             continue;
         }
@@ -428,7 +414,6 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             after_hashes.get(&hash).copied().filter(|new| {
                 !left.contains_key(new.path.as_slice())
                     && !left_u.could_hold(&new.path)
-                    && !right_u.may_shadow(new)
                     && right
                         .get(new.path.as_slice())
                         .is_some_and(|e| e.file_id == new.file_id)
@@ -449,7 +434,7 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         }
     }
     for new in right.values().filter(|e| !used_after.contains(&e.file_id)) {
-        if left_u.could_hold(&new.path) || right_u.may_shadow(new) {
+        if left_u.could_hold(&new.path) {
             changes.push(uncertain(None, Some(new)));
             continue;
         }

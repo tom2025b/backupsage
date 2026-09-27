@@ -86,11 +86,10 @@ pub enum NoteCode {
     /// lossy rendering of their name or link target (#105). They carry a
     /// lossy flag and are never treated as exact.
     LegacyLossyPaths,
-    /// Some sparse rows come from an indexer older than #63, which hashed
-    /// the condensed stream, stored its size and could keep a synthetic
-    /// `GNUSparseFile` name (#105). Their hash, size and name are never
-    /// trusted.
-    LegacySparseRows,
+    /// Unavailable: an indexer older than #63 wrote sparse rows with the
+    /// condensed stream's hash and size, and never recorded their real names
+    /// (#105). The archive must be re-indexed.
+    LegacySparseIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -126,7 +125,7 @@ impl NoteCode {
             NoteCode::SourceStatMatches => "source_stat_matches",
             NoteCode::SourceDirectoryUnverified => "source_directory_unverified",
             NoteCode::LegacyLossyPaths => "legacy_lossy_paths",
-            NoteCode::LegacySparseRows => "legacy_sparse_rows",
+            NoteCode::LegacySparseIndex => "legacy_sparse_index",
         }
     }
 }

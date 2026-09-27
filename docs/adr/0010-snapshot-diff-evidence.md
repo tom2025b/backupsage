@@ -355,62 +355,51 @@ What an older writer's index can and cannot tell:
   rendering. U+FFFD marks every such name, and also a name that genuinely
   held U+FFFD, since the two cannot be told apart. The loader flags such a
   row with `flags::LOSSY_PATH`, or `flags::LOSSY_LINK_TARGET` for the link
-  target, and adds a `legacy_lossy_paths` note.
-- **A sparse row from before #63 is not trustworthy at all.** That indexer
-  read PAX-sparse members through tar-rs. It hashed the *condensed* stream,
-  stored the condensed size, and for 0.1 and 1.0 kept the synthetic
-  `%d/GNUSparseFile.%p/%f` name. The v1.0.1 writer did the same with the
-  raw-path columns present, so the layout does not identify these indexes.
-  The `content_mode` meta key does: it arrived with #70, which already
-  carried #63's handling. Every `SPARSE` row of an index without that key
-  gets `flags::LEGACY_SPARSE`, and the index gets a `legacy_sparse_rows`
-  note. That includes old-GNU rows, whose hash was in fact logical: the row
-  alone cannot tell the dialects apart. Today's sparse rows are not
-  touched.
+  target, and adds a `legacy_lossy_paths` note. These flags are never
+  written to an index.
+- **A sparse row from before #63 cannot be mapped at all, so the index is
+  refused.** That indexer read PAX-sparse members through tar-rs.
+  - It hashed the *condensed* stream and stored the condensed size.
+  - It kept tar-rs's name instead of the real one. The real name is the
+    `GNU.sparse.name` record, which can be anything; for 0.1 and 1.0,
+    tar-rs's name is a synthetic `GNUSparseFile.<pid>` wrapper.
+  - So no finite rule says which path such a row holds, or which earlier
+    row it overwrites on extraction.
+  - The index is therefore unavailable with `legacy_sparse_index` and a
+    "re-index this archive" diagnostic, the same way an unknown entry type
+    is refused.
+  - The v1.0.1 writer did the same with the raw-path columns present, so
+    the layout does not identify these indexes. The `content_mode` meta key
+    does: it arrived with #70, which already carried #63's handling.
+  - Old-GNU rows are refused too, although their hash was logical, because
+    the row alone cannot tell the dialects apart.
+  - An old index with no sparse rows keeps loading, and today's sparse rows
+    are not affected.
 
-None of these flags is ever written to an index. `crate::legacy` says what
-a flagged name could be: the stored name and, for a sparse wrapper, `%d/%f`
-(and `%f` when `%d` is `.`). A lossy name also stands for every path that
-renders the same.
+How the engines treat a lossy row (`crate::legacy`):
+- **`diff`.** The row has no key in the effective namespace. It neither
+  shadows nor is shadowed, and it is reported as `inconclusive` /
+  `legacy_name_uncertain`. Any exact path on the other side that renders
+  the same is never `added` or `removed`, and never moved to or from. Other
+  exact names are compared as before, and moves between them are still
+  found.
+- **Coverage.** A lossy file is unknown content (`LegacyNameUncertain`),
+  never a copy, and it takes no part in shadowing. It still counts among
+  the source's unknown rows, so content it could hold is never ruled
+  `Absent`, and the replica count stays a lower bound.
+- An exact name in such an index is valid UTF-8 without U+FFFD. It never
+  renders like a lossy one, so a lossy row cannot overwrite it.
 
-How the engines treat a row whose name is uncertain (lossy or legacy
-sparse):
-- **`diff`.**
-  - The row has no key in the effective namespace. It neither shadows nor
-    is shadowed, and it is reported as `inconclusive` /
-    `legacy_name_uncertain`.
-  - Any exact path on the other side that it could be is never `added` or
-    `removed`, and never moved to or from.
-  - An earlier exact row on its own side at one of its possible paths may
-    have been overwritten when extracted, so it is inconclusive too.
-  - A legacy sparse hash is never trusted. As rule 4 already requires, it
-    switches move inference off for the snapshot, and `move_inference`
-    reports it as `unsupported_sparse`.
-- **Coverage.**
-  - Such a file is unknown content, never a copy. A legacy sparse row is
-    `UnsupportedSparse`, and a lossy one is `LegacyNameUncertain`.
-  - So is an earlier exact file that it could overwrite
-    (`LegacyNameUncertain`).
-  - It takes no part in shadowing, but it still counts among the source's
-    unknown rows. Content it could hold is therefore never ruled `Absent`,
-    and the replica count stays a lower bound.
-  - An exact file written *after* it is unaffected: it is what extraction
-    leaves.
-
-Limits, stated plainly:
-- The wrapper unwrapping follows GNU tar's fixed `%d/GNUSparseFile.%p/%f`
-  template, which libarchive also uses. A sparse name in any other shape is
-  taken to be exact, but its row is still never trusted as content.
-- An old-GNU sparse row from an old index loses its (correct) hash. That is
-  conservative: it becomes inconclusive, never wrong.
-
-`tests/legacy_paths.rs` pins these rules. The sparse cases use indexes that
-the old writers themselves (`bd9b3c2` and v1.0.1) wrote from #64's GNU tar
-fixtures; their provenance is in `tests/fixtures/legacy/README.md`. So does
-`pre_v1_0_1_layout_is_mapped_not_refused` in `tests/coverage_input.rs`,
-which replaces #103's refusal fixture. Each rule was shown to fail when
-removed, and again when weakened; the table is in #105's pull request.
+`tests/legacy_paths.rs` pins these rules. The old-writer cases use indexes
+that the old writers themselves (`bd9b3c2` and v1.0.1) wrote. Some come
+from #64's GNU tar fixtures, and some from two composed archives: a
+wrapper whose real name differs from its path, and an index without
+sparse rows. Their provenance is in `tests/fixtures/legacy/README.md`. So
+does `pre_v1_0_1_layout_is_mapped_not_refused` in
+`tests/coverage_input.rs`, which replaces #103's refusal fixture. Each
+rule was shown to fail when removed, and again when weakened; the table is
+in #105's pull request.
 
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-27T00:26:58-04:00
+**Signed:** max-cloud (Claude) · 2026-09-27T00:38:44-04:00

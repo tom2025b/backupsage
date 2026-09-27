@@ -9,25 +9,39 @@ writer with columns dropped. `tests/legacy_paths.rs` reads them.
 | `pre101-pax10.db` | `bd9b3c2` | `../sparse/sparse-pax10.tar` |
 | `pre101-oldgnu.db` | `bd9b3c2` | `../sparse/sparse-oldgnu.tar` |
 | `v101-pax10.db` | `ac32be1` (v1.0.1: raw-path columns, sparse handling before #63) | `../sparse/sparse-pax10.tar` |
-| `pre101-shadow-pax10.db` | `bd9b3c2` | `shadow-pax10.tar` |
-| `pre101-overwrite-pax10.db` | `bd9b3c2` | `overwrite-pax10.tar` |
+| `pre101-mismatch-pax10.db` | `bd9b3c2` | `mismatch-pax10.tar` |
+| `pre101-plain.db` | `bd9b3c2` | `plain-legacy.tar` (no sparse members) |
 
-The sparse archives are the GNU tar 1.35 fixtures from #64.
-`shadow-pax10.tar` is a plain ustar member `holey.bin` (63 bytes),
-followed by every member of `sparse-pax10.tar`. When GNU tar extracts it,
-the sparse `holey.bin` overwrites the plain one. `overwrite-pax10.tar` is
-the reverse: the members of `sparse-pax10.tar`, then a plain `holey.bin`
-(61 bytes) that overwrites the sparse one.
+The sparse archives are the GNU tar 1.35 fixtures from #64. The other two
+archives were composed for #105:
 
-What the old writers stored for a PAX-sparse member, which is the point of
-these fixtures:
+- **`mismatch-pax10.tar`** holds an ordinary ustar member `data/real.bin`
+  (66 bytes), followed by `sparse-pax10.tar`'s members. In that sparse
+  member's pax header, `GNU.sparse.name=holey.bin` was rewritten to
+  `GNU.sparse.name=data/real.bin`, with the record length, header size and
+  checksum fixed up. Its wrapper name is still
+  `./GNUSparseFile.1370099/holey.bin`. GNU tar 1.35 lists `data/real.bin`
+  twice. It extracts the 1,048,576-byte sparse file there, with the same
+  SHA-256 as `sparse-pax10.tar`'s `holey.bin`, over the ordinary one. The
+  old indexer recorded the ordinary `data/real.bin` and the wrapper name,
+  and nowhere the real name.
+- **`plain-legacy.tar`** was made with
+  `tar --format=gnu --sort=name --owner=0 --group=0 --mtime=@1700000001`
+  from a directory holding `plain.txt`, `café.txt`, two non-UTF-8 names
+  `d\xff` and `d\xfe`, and a symlink `link -> t\xff`. The old indexer
+  stored both non-UTF-8 names as `./d\u{fffd}`, flagged the earlier one
+  `SHADOWED`, and stored the link target as `t\u{fffd}`.
+
+What the old writers stored for a PAX-sparse member, which is why the
+loader refuses every index from before #63 that holds sparse rows:
 
 - **Hash:** BLAKE3 of the *condensed* stream tar-rs yields, not of the
   logical file.
 - **Size:** the condensed size: 8192 for 0.0, 8704 for 1.0 (the map preamble
   plus the data), not 1048576.
-- **Name:** for 0.1 and 1.0, the synthetic `./GNUSparseFile.<pid>/holey.bin`
-  wrapper. For 0.0, the real name.
+- **Name:** tar-rs's name, never `GNU.sparse.name`. For 0.1 and 1.0 that
+  is the synthetic `./GNUSparseFile.<pid>/holey.bin` wrapper. The real name
+  can be anything, as `mismatch-pax10.tar` shows.
 - **Flags:** `SPARSE` (8). No writer before #70 recorded the `content_mode`
   meta key.
 
