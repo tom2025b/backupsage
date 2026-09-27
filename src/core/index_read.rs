@@ -82,6 +82,10 @@ pub enum NoteCode {
     SourceStatMatches,
     /// A directory's own stat says nothing about the files inside it.
     SourceDirectoryUnverified,
+    /// Some rows come from an index older than v1.0.1 that stored only a
+    /// lossy rendering of their name or link target (#105). They carry a
+    /// lossy flag and are never treated as exact.
+    LegacyLossyPaths,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -116,6 +120,7 @@ impl NoteCode {
             NoteCode::SourceStale => "source_stale",
             NoteCode::SourceStatMatches => "source_stat_matches",
             NoteCode::SourceDirectoryUnverified => "source_directory_unverified",
+            NoteCode::LegacyLossyPaths => "legacy_lossy_paths",
         }
     }
 }

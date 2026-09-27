@@ -333,6 +333,49 @@ discovery without `--index`, and a file renamed over the path mid
 registration. Each was shown to fail when removed, and again when weakened;
 the table is in #102's pull request.
 
+**Signed:** max-cloud (Claude) · 2026-09-26T18:14:36-04:00
+
+## Addendum (#105): legacy indexes without raw-path columns
+
+Indexes written before v1.0.1 have no `path_raw` or `link_target_raw`
+column. The shared loader refused them as unreadable. It now maps them,
+the way master replication already did: a missing column reads as NULL.
+Nothing else about the read changes. The same pre-open guards, the one read
+transaction and the `finish` stamp apply, and an unknown entry type is
+still refused by coverage.
+
+What such an index can and cannot tell:
+- **A UTF-8 name is exact.** Before v1.0.1 every name was stored as text,
+  and a lossy rendering never changes valid UTF-8. So a legacy name
+  without U+FFFD is the entry's exact bytes, the same row a current index
+  would hold.
+- **A lossy name is not.** A non-UTF-8 name was stored only as its lossy
+  rendering. U+FFFD marks every such name, and also a name that genuinely
+  held U+FFFD, since the two cannot be told apart. The loader flags each
+  such row in memory: `flags::LOSSY_PATH` for the name and
+  `flags::LOSSY_LINK_TARGET` for the link target. These flags are never
+  written to any index. The input also gets a `legacy_lossy_paths` note
+  that counts the rows.
+
+How the engines treat a lossy row:
+- **`diff`.** The name could be any path that renders the same, so the row
+  has no key in the effective namespace. It neither shadows nor is
+  shadowed, and it is reported as `inconclusive` / `lossy_legacy_path`.
+  The same holds for every exact path on the other side that it could be.
+  Such a path is never `added`, `removed`, or moved to or from. Exact names
+  that no lossy name could be are compared as before.
+- **Coverage.** A lossy file is unknown content (`LossyLegacyPath`), never
+  a copy, and it takes no part in shadowing. It still counts among the
+  source's unknown rows, so the content it could hold is never ruled
+  `Absent` there. The replica count stays a lower bound. Its exact UTF-8
+  rows count like any other source's.
+
+`tests/legacy_paths.rs` pins these rules against a legacy copy of a real
+index. So does `pre_v1_0_1_layout_is_mapped_not_refused` in
+`tests/coverage_input.rs`, which replaces #103's refusal fixture. Each
+rule was shown to fail when removed, and again when weakened; the table is
+in #105's pull request.
+
 last_edited_by: max-cloud
 
-**Signed:** max-cloud (Claude) · 2026-09-26T18:14:36-04:00
+**Signed:** max-cloud (Claude) · 2026-09-26T21:52:49-04:00

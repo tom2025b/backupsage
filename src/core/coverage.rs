@@ -150,6 +150,10 @@ pub enum UnknownContentReason {
     /// tar-rs read, which need not be the logical file.
     PaxUnparsed,
     NotHashed,
+    /// A pre-v1.0.1 index recorded only a lossy rendering of the name
+    /// (#105): the row may be shadowed by, or shadow, another whose name
+    /// renders the same, so it is never counted as a copy.
+    LossyLegacyPath,
 }
 
 #[derive(Debug, Clone)]
@@ -256,7 +260,10 @@ struct Building {
 ///    stored `SHADOWED` flag is ignored: v3 computed it on display text.
 /// 2. Effective files with a hash and neither a read error nor unparsed pax
 ///    records are copies of that content; the rest are unknown content.
-/// 3. Hardlinks carry no bytes: an alias when an effective same-source copy
+/// 3. A row whose name is only a lossy legacy rendering
+///    ([`flags::LOSSY_PATH`], #105) has no known key: it neither shadows nor
+///    is shadowed, and such a file is unknown content, never a copy.
+/// 4. Hardlinks carry no bytes: an alias when an effective same-source copy
 ///    of their hash exists, otherwise an `UnmatchedHardlink` exclusion.
 ///    Symlinks are excluded.
 ///
@@ -297,6 +304,9 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
             if !file_ids.insert(row.file_id) {
                 bail!("coverage source {id} repeats file id {}", row.file_id);
             }
+            if row.flags & flags::LOSSY_PATH != 0 {
+                continue;
+            }
             let winner = latest.entry(&row.path_raw).or_insert(row.file_id);
             *winner = (*winner).max(row.file_id);
         }
@@ -309,7 +319,8 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
         let mut unknown = UnknownRows::default();
         let mut hardlinks = Vec::new();
         for row in &source.rows {
-            if latest[row.path_raw.as_slice()] != row.file_id {
+            let lossy = row.flags & flags::LOSSY_PATH != 0;
+            if !lossy && latest[row.path_raw.as_slice()] != row.file_id {
                 exclusions.push(Exclusion {
                     row: row_ref(row),
                     reason: ExclusionReason::Shadowed,
@@ -322,13 +333,15 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                     reason: ExclusionReason::Symlink,
                 }),
                 (EntryKind::Hardlink, _) => hardlinks.push(row),
-                (EntryKind::File, Some(hash)) if row.flags & UNTRUSTED_HASH == 0 => {
+                (EntryKind::File, Some(hash)) if !lossy && row.flags & UNTRUSTED_HASH == 0 => {
                     let building = groups.entry(hash).or_default();
                     building.copies.entry(id).or_default().push(row_ref(row));
                     building.sizes.extend(trusted_size(row));
                 }
                 (EntryKind::File, _) => {
-                    let reason = if row.flags & flags::READ_ERROR != 0 {
+                    let reason = if lossy {
+                        UnknownContentReason::LossyLegacyPath
+                    } else if row.flags & flags::READ_ERROR != 0 {
                         UnknownContentReason::ReadError
                     } else if row.flags & flags::PAX_UNPARSED != 0 {
                         UnknownContentReason::PaxUnparsed

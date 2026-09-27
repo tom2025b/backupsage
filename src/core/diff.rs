@@ -109,6 +109,9 @@ pub enum Reason {
     OtherSnapshotIncomplete,
     IncompatibleSnapshots,
     ShadowedPath,
+    /// A pre-v1.0.1 index recorded only a lossy rendering of a name
+    /// involved, so which path it is cannot be established (#105).
+    LossyLegacyPath,
 }
 
 /// A report always includes raw bytes, even for valid UTF-8. The display path
@@ -241,6 +244,13 @@ fn same_path(before: &Entry, after: &Entry) -> (ChangeKind, Reason) {
     }
 }
 
+fn lossy_path(entry: &Entry) -> bool {
+    entry.flags & flags::LOSSY_PATH != 0
+}
+
+/// The effective namespace, keyed on raw path bytes. A row whose name is
+/// only a lossy rendering (#105) has no known key: it neither shadows nor is
+/// shadowed, and [`compare`] reports it as inconclusive.
 fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
     let mut ids = BTreeSet::new();
     let mut paths: BTreeMap<&[u8], &Entry> = BTreeMap::new();
@@ -253,6 +263,9 @@ fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
             entry.file_id > 0 && ids.insert(entry.file_id),
             "invalid or duplicate file_id"
         );
+        if lossy_path(entry) {
+            continue;
+        }
         let winner = paths.entry(entry.path.as_slice()).or_insert(entry);
         if entry.file_id > winner.file_id {
             *winner = entry;
@@ -267,7 +280,7 @@ fn excluded(snapshot: &Snapshot, side: Side, paths: &BTreeMap<&[u8], &Entry>) ->
     snapshot
         .entries
         .iter()
-        .filter(|entry| paths[entry.path.as_slice()].file_id != entry.file_id)
+        .filter(|entry| !lossy_path(entry) && paths[entry.path.as_slice()].file_id != entry.file_id)
         .map(|entry| Excluded {
             side,
             reason: Reason::ShadowedPath,
@@ -339,6 +352,14 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
     let mut used_after = BTreeSet::new();
     let before_hashes = unique_hashes(before);
     let after_hashes = unique_hashes(after);
+    // A lossy legacy name (#105) could be any path that renders the same, so
+    // it stands in for every such path on its side: none of them can be
+    // shown absent there, or moved to or from.
+    let left_lossy = lossy_renderings(before);
+    let right_lossy = lossy_renderings(after);
+    let maybe_in = |renderings: &BTreeSet<Vec<u8>>, path: &[u8]| {
+        renderings.contains(String::from_utf8_lossy(path).as_bytes())
+    };
 
     for (path, old) in &left {
         if let Some(new) = right.get(path) {
@@ -351,6 +372,15 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             used_after.insert(new.file_id);
             continue;
         }
+        if maybe_in(&right_lossy, path) {
+            changes.push(change(
+                ChangeKind::Inconclusive,
+                Reason::LossyLegacyPath,
+                Some(old),
+                None,
+            ));
+            continue;
+        }
         let moved_to = trusted_hash(old).and_then(|hash| {
             // Empty content carries no identity evidence for a move.
             if !is_compatible || old.size == 0 || !before_hashes.contains_key(&hash) {
@@ -358,6 +388,7 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             }
             after_hashes.get(&hash).copied().filter(|new| {
                 !left.contains_key(new.path.as_slice())
+                    && !maybe_in(&left_lossy, &new.path)
                     && right
                         .get(new.path.as_slice())
                         .is_some_and(|e| e.file_id == new.file_id)
@@ -378,8 +409,28 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         }
     }
     for new in right.values().filter(|e| !used_after.contains(&e.file_id)) {
-        let (kind, reason) = absence(&before.info, is_compatible, ChangeKind::Added);
+        let (kind, reason) = if maybe_in(&left_lossy, &new.path) {
+            (ChangeKind::Inconclusive, Reason::LossyLegacyPath)
+        } else {
+            absence(&before.info, is_compatible, ChangeKind::Added)
+        };
         changes.push(change(kind, reason, None, Some(new)));
+    }
+    for old in before.entries.iter().filter(|e| lossy_path(e)) {
+        changes.push(change(
+            ChangeKind::Inconclusive,
+            Reason::LossyLegacyPath,
+            Some(old),
+            None,
+        ));
+    }
+    for new in after.entries.iter().filter(|e| lossy_path(e)) {
+        changes.push(change(
+            ChangeKind::Inconclusive,
+            Reason::LossyLegacyPath,
+            None,
+            Some(new),
+        ));
     }
     // Hex preserves byte lexicographic order. Anchor to the old path when
     // present, otherwise the new one; IDs make the key explicitly total.
@@ -429,6 +480,16 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         excluded,
         summary,
     })
+}
+
+/// The names of a snapshot's lossy legacy rows, as stored.
+fn lossy_renderings(snapshot: &Snapshot) -> BTreeSet<Vec<u8>> {
+    snapshot
+        .entries
+        .iter()
+        .filter(|e| lossy_path(e))
+        .map(|e| e.path.clone())
+        .collect()
 }
 
 fn absence(other: &SnapshotInfo, is_compatible: bool, kind: ChangeKind) -> (ChangeKind, Reason) {

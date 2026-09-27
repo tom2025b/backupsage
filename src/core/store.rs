@@ -36,6 +36,14 @@ pub mod flags {
     /// block may be invisible to tar-rs — content is indexed, but extended
     /// metadata is incomplete (#63; residual shapes pinned by #64).
     pub const PAX_UNPARSED: i64 = 64;
+    /// Reader-only, never written to an index (#105): the row comes from an
+    /// index that predates raw-path capture (v1.0.1) and its path text holds
+    /// U+FFFD, so its exact bytes were never recorded. Readers must not treat
+    /// the path as the entry's identity: `diff` and coverage report such a
+    /// row as inconclusive.
+    pub const LOSSY_PATH: i64 = 1 << 20;
+    /// Reader-only, never written (#105): the same for the link target.
+    pub const LOSSY_LINK_TARGET: i64 = 1 << 21;
 }
 
 /// Static description of the source being indexed, written into `meta`.

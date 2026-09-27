@@ -31,7 +31,7 @@ use crate::diff::{
     DiffReport, Entry, EntryType, Side, Snapshot, SnapshotInfo, SnapshotState, SourceCurrency,
 };
 use crate::report::to_hex;
-use crate::searcher::get_meta;
+use crate::searcher::{get_meta, has_column};
 use crate::store::{flags, SCHEMA_VERSION};
 
 /// What the loader established about one input, besides its rows.
@@ -170,11 +170,21 @@ fn read_index(
     // Rows are read only from a v3 layout; another schema is reported as
     // incompatible with no rows rather than guessed at.
     run_mid_read_hook(ReadPoint::BetweenStatements);
-    let entries = if info.schema_version == Some(SCHEMA_VERSION) {
+    let (entries, lossy_rows) = if info.schema_version == Some(SCHEMA_VERSION) {
         read_rows(&conn).map_err(|e| read_note(&e))?
     } else {
-        Vec::new()
+        (Vec::new(), 0)
     };
+    if lossy_rows > 0 {
+        notes.push(note(
+            NoteCode::LegacyLossyPaths,
+            format!(
+                "{lossy_rows} row(s) come from an index older than v1.0.1 that stored only a \
+                 lossy rendering of the name or link target; their exact bytes are unknown, \
+                 so they are never treated as exact"
+            ),
+        ));
+    }
     // Coherent only if the whole read happened under the one lock and the
     // file is exactly as it was.
     conn.finish()?;
@@ -185,14 +195,33 @@ fn read_index(
 /// Every row, verbatim. Each field comes from the row itself: in particular
 /// a NULL `content_hash` stays `None`. The indexer stores no hash for an
 /// unsupported PAX-sparse row, and nothing here may supply one (ADR 0010).
-fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, path, path_raw, entry_type, link_target, link_target_raw,
+///
+/// An index from before v1.0.1 has no `path_raw`/`link_target_raw` columns
+/// (#105); as in master replication, a missing column reads as NULL. Such an
+/// index stored every name as text, and a non-UTF-8 name as its lossy
+/// rendering, so U+FFFD marks each name whose bytes were never recorded
+/// (and a name that genuinely held U+FFFD, which cannot be told apart).
+/// Those rows carry [`flags::LOSSY_PATH`] / [`flags::LOSSY_LINK_TARGET`] and
+/// are counted in the second value; every other legacy name is exactly its
+/// UTF-8 bytes.
+fn read_rows(conn: &Connection) -> Result<(Vec<Entry>, usize)> {
+    let raw_path = has_column(conn, "files", "path_raw");
+    let raw_target = has_column(conn, "files", "link_target_raw");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, path, {}, entry_type, link_target, {},
                 size, mtime_unix, mode, content_hash, flags
          FROM files ORDER BY id",
-    )?;
+        if raw_path { "path_raw" } else { "NULL" },
+        if raw_target {
+            "link_target_raw"
+        } else {
+            "NULL"
+        },
+    ))?;
+    let lossy = |text: &str| text.contains('\u{fffd}');
     let mut rows = stmt.query([])?;
     let mut entries = Vec::new();
+    let mut lossy_rows = 0;
     while let Some(row) = rows.next()? {
         let file_id: i64 = row.get(0)?;
         let path: String = row.get(1)?;
@@ -203,6 +232,18 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
         let size: i64 = row.get(6)?;
         let mode: Option<i64> = row.get(8)?;
         let content_hash: Option<Vec<u8>> = row.get(9)?;
+        let mut row_flags: i64 = row.get(10)?;
+        let mut unrecorded = 0;
+        if !raw_path && lossy(&path) {
+            unrecorded |= flags::LOSSY_PATH;
+        }
+        if !raw_target && link_target.as_deref().is_some_and(lossy) {
+            unrecorded |= flags::LOSSY_LINK_TARGET;
+        }
+        if unrecorded != 0 {
+            row_flags |= unrecorded;
+            lossy_rows += 1;
+        }
         let malformed = |what: &str| anyhow!("malformed {what} on files row {file_id}");
         entries.push(Entry {
             file_id,
@@ -222,13 +263,13 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
             content_hash: content_hash
                 .map(|h| <[u8; 32]>::try_from(h.as_slice()).map_err(|_| malformed("content_hash")))
                 .transpose()?,
-            flags: row.get(10)?,
+            flags: row_flags,
         });
         if entries.len() == 1 {
             run_mid_read_hook(ReadPoint::BetweenRows);
         }
     }
-    Ok(entries)
+    Ok((entries, lossy_rows))
 }
 
 /// Where the live source stands against what the index recorded. A `stat`
