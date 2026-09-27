@@ -1,3 +1,5 @@
+// last_edited_by: codex
+// **Signed:** codex · 2026-09-26T22:22:09-04:00
 //! Command-line interface, defined with clap's derive API.
 
 use clap::{Args, Parser, Subcommand};
@@ -84,6 +86,9 @@ pub struct DiffArgs {
 
 #[derive(Args, Debug)]
 pub struct IndexArgs {
+    /// Fully reprocess directory files instead of reusing content-verified results.
+    #[arg(long)]
+    pub force_full: bool,
     /// Archives (.tar/.tar.gz/.tar.zst, detected by content) or directories.
     #[arg(required = true)]
     pub sources: Vec<PathBuf>,

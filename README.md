@@ -90,6 +90,22 @@ The index lands at `<source>.db` next to the source.
 | `--max-file-size <SIZE>` | Text-search cap per file (default `16M`; hash always covers everything) |
 | `--media-cap <SIZE>` | Image decode cap (default `64M`; larger images get no pHash) |
 | `--no-word-stats` | Skip word statistics (faster; `top` empty) |
+| `--force-full` | Reprocess all directory content, bypassing verified-result reuse |
+
+
+Re-indexing a directory reconciles every path and hashes every regular file.
+Compatible full-mode indexes reuse content-derived results only after the full
+hash matches; size and mtime alone never authorize reuse. The command reports
+that it is performing a full subtree content rescan. This saves repeated media
+analysis, but does not skip file reads or rebuilding FTS and word statistics.
+Changed options, old indexes and other content modes fall back to fresh
+processing. `--force-full` always reprocesses content; metadata-only still never
+opens file content. Detected source changes or cancellation abort promotion and
+preserve the last completed index. For an atomic source view, index a filesystem
+snapshot. See [ADR 0012](docs/adr/0012-directory-content-reuse.md) for the contract.
+
+<!-- Directory re-index section: last_edited_by: codex -->
+<!-- **Signed:** codex · 2026-09-26T22:21:19-04:00 -->
 
 ### `master` — the catalog across all your backups
 

@@ -1,3 +1,5 @@
+// last_edited_by: codex
+// **Signed:** codex · 2026-09-26T22:22:09-04:00
 //! Streams a source (tar archive or directory) entry-by-entry and indexes
 //! text into SQLite FTS5 plus per-file metadata — size, mtime, full-content
 //! BLAKE3, image dimensions, perceptual hash, EXIF date — in a single pass,
@@ -84,6 +86,8 @@ impl ContentMode {
 }
 
 pub struct IndexOptions {
+    /// Reprocess directory content even when a verified prior result is available.
+    pub force_full: bool,
     /// Per-file cap on retained content for text indexing.
     pub max_file_size: u64,
     /// Per-file cap on retained content for media entries (image decode
@@ -98,6 +102,7 @@ pub struct IndexOptions {
 impl Default for IndexOptions {
     fn default() -> Self {
         IndexOptions {
+            force_full: false,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             media_cap: DEFAULT_MEDIA_CAP,
             word_stats: true,
@@ -108,6 +113,8 @@ impl Default for IndexOptions {
 
 #[derive(Debug, Default)]
 pub struct IndexSummary {
+    /// Directory files whose derived content was reused after reading and hashing all bytes.
+    pub files_reused: u64,
     pub db_path: PathBuf,
     pub format: String,
     /// Text files whose content went into FTS.
@@ -225,6 +232,21 @@ pub(crate) fn process_reader_with_control(
     warn: &mut dyn FnMut(String),
     control: &OperationControl<'_>,
 ) -> Result<EntryOutcome> {
+    process_reader_with_reuse(reader, declared_size, path, opts, warn, control, None)
+        .map(|(outcome, _)| outcome)
+}
+
+/// Reuse is only considered AFTER a complete successful read and full hash.
+/// Callers must gate prior results on processing options and exact path bytes.
+pub(crate) fn process_reader_with_reuse(
+    reader: &mut dyn Read,
+    declared_size: u64,
+    path: &str,
+    opts: &IndexOptions,
+    warn: &mut dyn FnMut(String),
+    control: &OperationControl<'_>,
+    previous: Option<EntryOutcome>,
+) -> Result<(EntryOutcome, bool)> {
     let mk = exif_date::media_kind(path);
     let cap = if mk == MediaKind::Other {
         opts.max_file_size
@@ -268,16 +290,22 @@ pub(crate) fn process_reader_with_control(
             Err(e) => {
                 warn(format!("warning: read error in '{path}': {e}"));
                 out.flags |= flags::READ_ERROR;
-                return Ok(out); // name-only row; a partial hash would be a lie
+                return Ok((out, false)); // name-only row; a partial hash would be a lie
             }
         }
     }
     out.content_hash = Some(*hasher.finalize().as_bytes());
 
+    if let Some(previous) = previous {
+        if previous.content_hash == out.content_hash {
+            return Ok((previous, true));
+        }
+    }
+
     if total == 0 {
         out.kind = "empty";
         out.fts_text = Some(String::new());
-        return Ok(out);
+        return Ok((out, false));
     }
     let over_cap = total > cap;
 
@@ -329,7 +357,7 @@ pub(crate) fn process_reader_with_control(
             }
         }
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 impl EntryOutcome {
@@ -1044,6 +1072,34 @@ pub(crate) fn metadata_kind(path: &str, size: u64) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_verification_read_never_returns_cached_content() {
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("injected read failure"))
+            }
+        }
+        let opts = IndexOptions::default();
+        let previous = process_reader(&mut &b"cached words"[..], 12, "file", &opts, &mut |_| {});
+        let mut warnings = Vec::new();
+        let (outcome, reused) = process_reader_with_reuse(
+            &mut FailingReader,
+            12,
+            "file",
+            &opts,
+            &mut |message| warnings.push(message),
+            &OperationControl::default(),
+            Some(previous),
+        )
+        .unwrap();
+        assert!(!reused);
+        assert!(outcome.content_hash.is_none());
+        assert!(outcome.fts_text.is_none());
+        assert_ne!(outcome.flags & flags::READ_ERROR, 0);
+        assert_eq!(warnings.len(), 1);
+    }
 
     #[test]
     fn cancellation_during_content_read_is_not_downgraded_to_a_warning() {
