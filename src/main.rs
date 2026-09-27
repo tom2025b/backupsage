@@ -1,3 +1,5 @@
+// last_edited_by: codex
+// **Signed:** codex · 2026-09-26T22:22:09-04:00
 //! Entry point: parse the CLI, dispatch to the library, render results.
 //!
 //! Exit codes: 0 ok · 1 error · 2 completed but with skipped archives
@@ -49,6 +51,7 @@ fn run() -> Result<i32> {
                 bail!("--index only makes sense with a single source");
             }
             let opts = IndexOptions {
+                force_full: args.force_full,
                 max_file_size: args.max_file_size,
                 media_cap: args.media_cap,
                 word_stats: !args.no_word_stats,
