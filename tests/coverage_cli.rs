@@ -1190,3 +1190,34 @@ fn output_never_takes_a_sidecar_name_beside_a_symlinked_index_target() {
     // The index still reads afterwards.
     assert_eq!(code(&coverage_dbs(&[&alias], &["--json"])), 0);
 }
+
+/// A pre-v1.0.1 index recorded only lossy names (#105, #107): such rows
+/// are unknown content with their own reason, never counted as copies.
+#[test]
+fn legacy_lossy_names_are_unknown_content_never_copies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("pre101-plain.db");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy/pre101-plain.db"),
+        &db,
+    )
+    .unwrap();
+    let out = coverage_dbs(&[&db], &["--json"]);
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    let doc = json(&out);
+    let reasons: Vec<&str> = doc["unknown_content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["reason"].as_str().unwrap())
+        .collect();
+    assert!(!reasons.is_empty());
+    assert!(
+        reasons.iter().all(|r| *r == "legacy_name_uncertain"),
+        "{reasons:?}"
+    );
+    assert_eq!(doc["coverage_state"], "inconclusive");
+    assert_totals(&doc, "legacy");
+    let text = stdout(&coverage_dbs(&[&db], &[]));
+    assert!(text.contains("[legacy_name_uncertain]"), "{text}");
+}
