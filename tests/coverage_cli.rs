@@ -1160,3 +1160,33 @@ fn kind_filter_matches_dedup_and_every_copy_still_counts() {
         stderr(&out)
     );
 }
+
+/// SQLite names sidecars after the resolved file, and the reader checks
+/// both spellings, so a symlinked index reserves the sidecar names beside
+/// its target too.
+#[test]
+fn output_never_takes_a_sidecar_name_beside_a_symlinked_index_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = corpus(tmp.path());
+    let real_dir = tmp.path().join("x");
+    fs::create_dir(&real_dir).unwrap();
+    let real = real_dir.join("real.db");
+    fs::rename(&c.a, &real).unwrap();
+    let alias = real_dir.join("alias.db");
+    std::os::unix::fs::symlink("real.db", &alias).unwrap();
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut name = real.clone().into_os_string();
+        name.push(suffix);
+        let dest = PathBuf::from(name);
+        let out = coverage_dbs(&[&alias], &["--json", "-o", dest.to_str().unwrap()]);
+        assert_eq!(code(&out), 1, "{suffix}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("protected input"),
+            "{suffix}: refused for another reason: {}",
+            stderr(&out)
+        );
+        assert!(!dest.exists(), "{suffix}: created {}", dest.display());
+    }
+    // The index still reads afterwards.
+    assert_eq!(code(&coverage_dbs(&[&alias], &["--json"])), 0);
+}
