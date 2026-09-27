@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{bail, Result};
 
+use crate::legacy;
 use crate::store::flags;
 
 /// How much of a source's content the caller could observe.
@@ -150,6 +151,10 @@ pub enum UnknownContentReason {
     /// tar-rs read, which need not be the logical file.
     PaxUnparsed,
     NotHashed,
+    /// An index from before v1.0.1 recorded only a lossy rendering of the
+    /// name (#105): the row may be shadowed by, or shadow, another whose name
+    /// renders the same, so it is never counted as a copy.
+    LegacyNameUncertain,
 }
 
 #[derive(Debug, Clone)]
@@ -256,7 +261,12 @@ struct Building {
 ///    stored `SHADOWED` flag is ignored: v3 computed it on display text.
 /// 2. Effective files with a hash and neither a read error nor unparsed pax
 ///    records are copies of that content; the rest are unknown content.
-/// 3. Hardlinks carry no bytes: an alias when an effective same-source copy
+/// 3. A row whose name is only a lossy legacy rendering
+///    ([`crate::legacy`], #105) has no known key: it neither shadows nor is
+///    shadowed, and such a file is unknown content, never a copy. (An index
+///    from before #63 holding sparse rows never gets here: the loader
+///    refuses it.)
+/// 4. Hardlinks carry no bytes: an alias when an effective same-source copy
 ///    of their hash exists, otherwise an `UnmatchedHardlink` exclusion.
 ///    Symlinks are excluded.
 ///
@@ -297,6 +307,9 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
             if !file_ids.insert(row.file_id) {
                 bail!("coverage source {id} repeats file id {}", row.file_id);
             }
+            if legacy::name_uncertain(row.flags) {
+                continue;
+            }
             let winner = latest.entry(&row.path_raw).or_insert(row.file_id);
             *winner = (*winner).max(row.file_id);
         }
@@ -309,7 +322,8 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
         let mut unknown = UnknownRows::default();
         let mut hardlinks = Vec::new();
         for row in &source.rows {
-            if latest[row.path_raw.as_slice()] != row.file_id {
+            let name_uncertain = legacy::name_uncertain(row.flags);
+            if !name_uncertain && latest[row.path_raw.as_slice()] != row.file_id {
                 exclusions.push(Exclusion {
                     row: row_ref(row),
                     reason: ExclusionReason::Shadowed,
@@ -322,7 +336,9 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                     reason: ExclusionReason::Symlink,
                 }),
                 (EntryKind::Hardlink, _) => hardlinks.push(row),
-                (EntryKind::File, Some(hash)) if row.flags & UNTRUSTED_HASH == 0 => {
+                (EntryKind::File, Some(hash))
+                    if row.flags & UNTRUSTED_HASH == 0 && !name_uncertain =>
+                {
                     let building = groups.entry(hash).or_default();
                     building.copies.entry(id).or_default().push(row_ref(row));
                     building.sizes.extend(trusted_size(row));
@@ -334,6 +350,8 @@ pub fn group(sources: &[CoverageSource]) -> Result<Coverage> {
                         UnknownContentReason::PaxUnparsed
                     } else if row.flags & flags::SPARSE != 0 {
                         UnknownContentReason::UnsupportedSparse
+                    } else if name_uncertain {
+                        UnknownContentReason::LegacyNameUncertain
                     } else {
                         UnknownContentReason::NotHashed
                     };

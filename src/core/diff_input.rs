@@ -19,7 +19,7 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{anyhow, bail, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::index_read::{note, read_note, run_mid_read_hook, LockedIndex};
@@ -170,11 +170,39 @@ fn read_index(
     // Rows are read only from a v3 layout; another schema is reported as
     // incompatible with no rows rather than guessed at.
     run_mid_read_hook(ReadPoint::BetweenStatements);
-    let entries = if info.schema_version == Some(SCHEMA_VERSION) {
-        read_rows(&conn).map_err(|e| read_note(&e))?
+    // The `content_mode` key arrived with #70, which already carried #63's
+    // sparse handling; an index without it may hold condensed sparse rows
+    // under names that are not their real ones.
+    let old_sparse_writer = health.content_mode.is_none();
+    let (entries, legacy) = if info.schema_version == Some(SCHEMA_VERSION) {
+        read_rows(&conn, old_sparse_writer).map_err(|e| read_note(&e))?
     } else {
-        Vec::new()
+        (Vec::new(), LegacyRows::default())
     };
+    if legacy.lossy > 0 {
+        notes.push(note(
+            NoteCode::LegacyLossyPaths,
+            format!(
+                "{} row(s) come from an index older than v1.0.1 that stored only a \
+                 lossy rendering of the name or link target; their exact bytes are unknown, \
+                 so they are never treated as exact",
+                legacy.lossy
+            ),
+        ));
+    }
+    // Refused, like an unknown entry type: nothing here can recover what
+    // the old indexer never recorded (#105).
+    if legacy.sparse > 0 {
+        return Err(note(
+            NoteCode::LegacySparseIndex,
+            format!(
+                "written before sparse members were handled (#63): {} sparse row(s) \
+                 carry the hash and size of the condensed stream, and their real names \
+                 (GNU.sparse.name) were never recorded; re-index this archive",
+                legacy.sparse
+            ),
+        ));
+    }
     // Coherent only if the whole read happened under the one lock and the
     // file is exactly as it was.
     conn.finish()?;
@@ -182,17 +210,62 @@ fn read_index(
     Ok(entries)
 }
 
+/// Rows the loader marked as written by an older indexer (#105).
+#[derive(Default)]
+struct LegacyRows {
+    /// Name or link target stored only as a lossy rendering.
+    lossy: usize,
+    /// Sparse rows from an indexer before #63's sparse handling.
+    sparse: usize,
+}
+
+/// Whether `files` has column `col`. Unlike [`crate::searcher::has_column`],
+/// a failed probe is an error, never "absent": reading NULL for a column
+/// that exists would drop its bytes with no reason given (#105).
+fn files_column(conn: &Connection, col: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_xinfo('files') WHERE name = ?1",
+        [col],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|found| found.is_some())
+}
+
 /// Every row, verbatim. Each field comes from the row itself: in particular
 /// a NULL `content_hash` stays `None`. The indexer stores no hash for an
 /// unsupported PAX-sparse row, and nothing here may supply one (ADR 0010).
-fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, path, path_raw, entry_type, link_target, link_target_raw,
+///
+/// Rows from older indexers are marked, never rewritten (#105):
+/// - An index from before v1.0.1 has no `path_raw`/`link_target_raw`
+///   columns; as in master replication, a column shown to be missing reads
+///   as NULL. Such an index stored every name as text, and a non-UTF-8 name
+///   as its lossy rendering, so U+FFFD marks each name whose bytes were
+///   never recorded (and a name that genuinely held U+FFFD, which cannot be
+///   told apart): [`flags::LOSSY_PATH`] / [`flags::LOSSY_LINK_TARGET`].
+///   Every other legacy name is exactly its UTF-8 bytes.
+/// - An index from before #63 (`old_sparse_writer`) hashed PAX-sparse
+///   members' condensed stream, stored its size, and kept tar-rs's name
+///   instead of the real one (`GNU.sparse.name`, which can be anything). Its
+///   `SPARSE` rows are counted, and the caller refuses the index.
+fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, LegacyRows)> {
+    let raw_path = files_column(conn, "path_raw")?;
+    let raw_target = files_column(conn, "link_target_raw")?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, path, {}, entry_type, link_target, {},
                 size, mtime_unix, mode, content_hash, flags
          FROM files ORDER BY id",
-    )?;
+        if raw_path { "path_raw" } else { "NULL" },
+        if raw_target {
+            "link_target_raw"
+        } else {
+            "NULL"
+        },
+    ))?;
+    let lossy = |text: &str| text.contains('\u{fffd}');
     let mut rows = stmt.query([])?;
     let mut entries = Vec::new();
+    let mut legacy = LegacyRows::default();
     while let Some(row) = rows.next()? {
         let file_id: i64 = row.get(0)?;
         let path: String = row.get(1)?;
@@ -203,6 +276,21 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
         let size: i64 = row.get(6)?;
         let mode: Option<i64> = row.get(8)?;
         let content_hash: Option<Vec<u8>> = row.get(9)?;
+        let mut row_flags: i64 = row.get(10)?;
+        let mut unrecorded = 0;
+        if !raw_path && lossy(&path) {
+            unrecorded |= flags::LOSSY_PATH;
+        }
+        if !raw_target && link_target.as_deref().is_some_and(lossy) {
+            unrecorded |= flags::LOSSY_LINK_TARGET;
+        }
+        if unrecorded != 0 {
+            row_flags |= unrecorded;
+            legacy.lossy += 1;
+        }
+        if old_sparse_writer && row_flags & flags::SPARSE != 0 {
+            legacy.sparse += 1;
+        }
         let malformed = |what: &str| anyhow!("malformed {what} on files row {file_id}");
         entries.push(Entry {
             file_id,
@@ -222,13 +310,13 @@ fn read_rows(conn: &Connection) -> Result<Vec<Entry>> {
             content_hash: content_hash
                 .map(|h| <[u8; 32]>::try_from(h.as_slice()).map_err(|_| malformed("content_hash")))
                 .transpose()?,
-            flags: row.get(10)?,
+            flags: row_flags,
         });
         if entries.len() == 1 {
             run_mid_read_hook(ReadPoint::BetweenRows);
         }
     }
-    Ok(entries)
+    Ok((entries, legacy))
 }
 
 /// Where the live source stands against what the index recorded. A `stat`

@@ -82,6 +82,14 @@ pub enum NoteCode {
     SourceStatMatches,
     /// A directory's own stat says nothing about the files inside it.
     SourceDirectoryUnverified,
+    /// Some rows come from an index older than v1.0.1 that stored only a
+    /// lossy rendering of their name or link target (#105). They carry a
+    /// lossy flag and are never treated as exact.
+    LegacyLossyPaths,
+    /// Unavailable: an indexer older than #63 wrote sparse rows with the
+    /// condensed stream's hash and size, and never recorded their real names
+    /// (#105). The archive must be re-indexed.
+    LegacySparseIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -116,6 +124,8 @@ impl NoteCode {
             NoteCode::SourceStale => "source_stale",
             NoteCode::SourceStatMatches => "source_stat_matches",
             NoteCode::SourceDirectoryUnverified => "source_directory_unverified",
+            NoteCode::LegacyLossyPaths => "legacy_lossy_paths",
+            NoteCode::LegacySparseIndex => "legacy_sparse_index",
         }
     }
 }

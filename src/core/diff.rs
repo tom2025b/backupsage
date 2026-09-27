@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+use crate::legacy;
 use crate::report::to_hex;
 use crate::store::{flags, SCHEMA_VERSION};
 
@@ -109,6 +110,9 @@ pub enum Reason {
     OtherSnapshotIncomplete,
     IncompatibleSnapshots,
     ShadowedPath,
+    /// A pre-v1.0.1 index recorded only a lossy rendering of a name
+    /// involved, so which path it is cannot be established (#105).
+    LegacyNameUncertain,
 }
 
 /// A report always includes raw bytes, even for valid UTF-8. The display path
@@ -241,6 +245,34 @@ fn same_path(before: &Entry, after: &Entry) -> (ChangeKind, Reason) {
     }
 }
 
+fn uncertain_name(entry: &Entry) -> bool {
+    legacy::name_uncertain(entry.flags)
+}
+
+/// The stored names of a snapshot's lossy legacy rows (#105).
+struct Uncertain(BTreeSet<Vec<u8>>);
+
+impl Uncertain {
+    fn of(snapshot: &Snapshot) -> Self {
+        Self(
+            snapshot
+                .entries
+                .iter()
+                .filter(|e| uncertain_name(e))
+                .map(|e| e.path.clone())
+                .collect(),
+        )
+    }
+
+    /// Whether some lossy row could be at `path`.
+    fn could_hold(&self, path: &[u8]) -> bool {
+        self.0.iter().any(|stored| legacy::could_be(stored, path))
+    }
+}
+
+/// The effective namespace, keyed on raw path bytes. A row whose name an
+/// older indexer did not record exactly (#105) has no known key: it neither
+/// shadows nor is shadowed, and [`compare`] reports it as inconclusive.
 fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
     let mut ids = BTreeSet::new();
     let mut paths: BTreeMap<&[u8], &Entry> = BTreeMap::new();
@@ -253,6 +285,9 @@ fn visible(snapshot: &Snapshot) -> Result<BTreeMap<&[u8], &Entry>> {
             entry.file_id > 0 && ids.insert(entry.file_id),
             "invalid or duplicate file_id"
         );
+        if uncertain_name(entry) {
+            continue;
+        }
         let winner = paths.entry(entry.path.as_slice()).or_insert(entry);
         if entry.file_id > winner.file_id {
             *winner = entry;
@@ -267,7 +302,9 @@ fn excluded(snapshot: &Snapshot, side: Side, paths: &BTreeMap<&[u8], &Entry>) ->
     snapshot
         .entries
         .iter()
-        .filter(|entry| paths[entry.path.as_slice()].file_id != entry.file_id)
+        .filter(|entry| {
+            !uncertain_name(entry) && paths[entry.path.as_slice()].file_id != entry.file_id
+        })
         .map(|entry| Excluded {
             side,
             reason: Reason::ShadowedPath,
@@ -339,6 +376,20 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
     let mut used_after = BTreeSet::new();
     let before_hashes = unique_hashes(before);
     let after_hashes = unique_hashes(after);
+    // A lossy legacy name (#105) stands for every path that renders the same
+    // on its side: none of them can be shown absent there, or moved to or
+    // from. (An exact name in such an index is valid UTF-8 without U+FFFD,
+    // so it never renders like a lossy one and nothing it holds is hidden.)
+    let left_u = Uncertain::of(before);
+    let right_u = Uncertain::of(after);
+    let uncertain = |before: Option<&Entry>, after: Option<&Entry>| {
+        change(
+            ChangeKind::Inconclusive,
+            Reason::LegacyNameUncertain,
+            before,
+            after,
+        )
+    };
 
     for (path, old) in &left {
         if let Some(new) = right.get(path) {
@@ -351,6 +402,10 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             used_after.insert(new.file_id);
             continue;
         }
+        if right_u.could_hold(path) {
+            changes.push(uncertain(Some(old), None));
+            continue;
+        }
         let moved_to = trusted_hash(old).and_then(|hash| {
             // Empty content carries no identity evidence for a move.
             if !is_compatible || old.size == 0 || !before_hashes.contains_key(&hash) {
@@ -358,6 +413,7 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
             }
             after_hashes.get(&hash).copied().filter(|new| {
                 !left.contains_key(new.path.as_slice())
+                    && !left_u.could_hold(&new.path)
                     && right
                         .get(new.path.as_slice())
                         .is_some_and(|e| e.file_id == new.file_id)
@@ -378,8 +434,18 @@ pub fn compare(before: &Snapshot, after: &Snapshot) -> Result<DiffReport> {
         }
     }
     for new in right.values().filter(|e| !used_after.contains(&e.file_id)) {
+        if left_u.could_hold(&new.path) {
+            changes.push(uncertain(None, Some(new)));
+            continue;
+        }
         let (kind, reason) = absence(&before.info, is_compatible, ChangeKind::Added);
         changes.push(change(kind, reason, None, Some(new)));
+    }
+    for old in before.entries.iter().filter(|e| uncertain_name(e)) {
+        changes.push(uncertain(Some(old), None));
+    }
+    for new in after.entries.iter().filter(|e| uncertain_name(e)) {
+        changes.push(uncertain(None, Some(new)));
     }
     // Hex preserves byte lexicographic order. Anchor to the old path when
     // present, otherwise the new one; IDs make the key explicitly total.

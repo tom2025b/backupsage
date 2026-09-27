@@ -12,7 +12,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use backupsage::coverage::{Presence, SourceEvidence, UnknownReason};
+use backupsage::coverage::{Presence, ReplicaCount, SourceEvidence, UnknownReason};
 use backupsage::coverage_input::{
     build, currency_can_show_presence, load_from_indexes, load_from_master, load_registry,
     set_master_read_hook, LoadCode, LoadedCoverage, LoadedSource, RegistrySource,
@@ -140,11 +140,6 @@ fn refusals(db: &Path) -> Vec<(&'static str, PathBuf, NoteCode)> {
             ),
             NoteCode::UnsupportedHashAlgo,
         ),
-        (
-            "pre-v1.0.1 layout",
-            altered_copy(db, "old.db", "ALTER TABLE files DROP COLUMN path_raw;"),
-            NoteCode::IndexUnreadable,
-        ),
     ]
 }
 
@@ -199,6 +194,45 @@ fn every_refused_index_is_an_unavailable_source_never_absence() {
     for (what, variant, code) in refusals(&b) {
         let loaded = build(&registry(&[(1, "a", &a), (2, "b", &variant)])).unwrap();
         assert_refused(&loaded, 2, code, what);
+    }
+}
+
+/// A pre-v1.0.1 index has no raw-path columns. #103 pinned it as refused
+/// (`IndexUnreadable`); since #105 it loads, and its UTF-8 names are the
+/// exact bytes, so its copies count like any other source's.
+#[test]
+fn pre_v1_0_1_layout_is_mapped_not_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = pair(tmp.path());
+    for (what, sql) in [
+        ("path_raw only", "ALTER TABLE files DROP COLUMN path_raw;"),
+        (
+            "both raw columns",
+            "ALTER TABLE files DROP COLUMN path_raw;
+             ALTER TABLE files DROP COLUMN link_target_raw;
+             DELETE FROM meta WHERE key = 'path_raw';",
+        ),
+    ] {
+        let old = altered_copy(&b, "old.db", sql);
+        let loaded = build(&registry(&[(1, "a", &a), (2, "old", &old)])).unwrap();
+        let s = src(&loaded, 2);
+        assert_eq!(
+            s.evidence,
+            SourceEvidence::Complete,
+            "{what}: {:?}",
+            s.index_notes
+        );
+        assert_eq!(s.status, SourceStatus::Ok, "{what}");
+        assert_eq!(s.rows.len(), 1, "{what}");
+        assert_eq!(s.rows[0].path_raw, b"copy-of-shared", "{what}");
+        let cov = loaded.coverage().unwrap();
+        let g = cov
+            .groups
+            .iter()
+            .find(|g| g.content_hash == shared_hash())
+            .unwrap();
+        assert_eq!(g.replicas, ReplicaCount::Exact(2), "{what}");
+        fs::remove_file(&old).unwrap();
     }
 }
 
