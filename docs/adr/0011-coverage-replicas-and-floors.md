@@ -179,7 +179,9 @@ and renders the floors result.
     every directory source's whole tree. Inputs are protected by name as
     well as by identity, so a name is refused even when nothing exists
     there: a missing index, an unplugged archive's recorded path, and the
-    `-wal`, `-shm` and `-journal` names beside the master and every index.
+    `-wal`, `-shm` and `-journal` names beside the master and every index,
+    under both the given spelling and the file it resolves to (SQLite
+    names sidecars after the resolved file, and the reader checks both).
     A report written there would be taken for that input, or would make
     the index look in use.
 

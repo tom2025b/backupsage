@@ -77,7 +77,10 @@ One module, `src/outpath.rs`, owns destination safety:
 `-journal` names). Identity checks only see files that exist; a report
 written at a missing index's path, an unplugged archive's recorded path, or
 a sidecar name SQLite has not created yet would later be taken for that
-input. Names are compared after canonicalizing the parent directory (or
+input. Each input is reserved under the given spelling and under the file
+it resolves to, since SQLite names sidecars after the resolved file (the
+reader's `pending_sidecars` checks both). Names are compared after
+canonicalizing the parent directory (or
 normalizing it lexically when it does not exist), so another spelling of
 the same name is caught. `coverage -o` uses them; the other write paths
 are unchanged.
