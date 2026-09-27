@@ -100,11 +100,13 @@ and writes nothing beside any of them.
     holds reads as an unknown lower bound (`AtLeast(0)`), never as zero
     copies. An index the loader refuses (missing, pending journal, WAL
     mode, multiply linked, busy, changed during the read, unreadable,
-    including a pre-v1.0.1 layout without `path_raw`) or finds incompatible
+    or a pre-#63 index holding sparse rows) or finds incompatible
     (another schema, hash algorithm or identity) is `Unavailable`, with the
     loader's reason and no rows. An unknown entry type, or a metadata-only
     index whose row carries a hash, also makes it `Unavailable`: refused
-    rather than guessed.
+    rather than guessed. A pre-v1.0.1 index without `path_raw` is read
+    (#107): a name it recorded only as a lossy rendering is unknown content
+    (`legacy_name_uncertain`), never a copy.
 11. Trust starts from the same reading: an unusable index is `db-missing`, an
     offline or unreadable source is `archive-missing`, a source whose stat
     differs from the index is `stale-index`, an incomplete index is
