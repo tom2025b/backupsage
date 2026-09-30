@@ -160,14 +160,48 @@ impl ProtectedSet {
     }
 }
 
+/// Symlink hops followed before giving up on a chain (the kernel's own
+/// limit is 40 too), so a loop cannot hang the reservation.
+const MAX_SYMLINK_HOPS: usize = 40;
+
 /// The given spelling of `path`, plus the file it resolves to when that
 /// differs (a symlink, or a symlinked final component).
+///
+/// A dangling symlink has no canonical form, yet its missing target is
+/// exactly where the input would be read from once restored, so every
+/// hop of the final component's symlink chain is reserved too. Without
+/// this, `-o` could create a report at that target and turn the input
+/// symlink into a pointer to report JSON.
 fn spellings(path: &Path) -> Vec<PathBuf> {
     let mut out = vec![path.to_path_buf()];
     if let Ok(resolved) = fs::canonicalize(path) {
         if resolved != path {
             out.push(resolved);
         }
+    }
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_SYMLINK_HOPS {
+        let is_link = fs::symlink_metadata(&current)
+            .map(|md| md.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_link {
+            break;
+        }
+        let Ok(target) = fs::read_link(&current) else {
+            break;
+        };
+        let next = if target.is_absolute() {
+            target
+        } else {
+            match current.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => dir.join(target),
+                _ => target,
+            }
+        };
+        if !out.contains(&next) {
+            out.push(next.clone());
+        }
+        current = next;
     }
     out
 }

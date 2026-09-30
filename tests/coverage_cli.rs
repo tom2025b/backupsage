@@ -1191,6 +1191,59 @@ fn output_never_takes_a_sidecar_name_beside_a_symlinked_index_target() {
     assert_eq!(code(&coverage_dbs(&[&alias], &["--json"])), 0);
 }
 
+/// A dangling input symlink (#106 review round 3): its missing target is
+/// where the index is read from once restored, so neither that target nor
+/// any sidecar SQLite would create beside it may become the report — also
+/// through a chain of links, relative or absolute. A symlink loop must
+/// neither hang nor unlock anything.
+#[test]
+fn output_never_takes_the_missing_target_of_a_dangling_input_symlink() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("x");
+    fs::create_dir(&dir).unwrap();
+    let real = dir.join("real.db");
+    let alias = dir.join("alias.db");
+    std::os::unix::fs::symlink("real.db", &alias).unwrap();
+    let hop = dir.join("hop.db");
+    let chained = dir.join("chained.db");
+    std::os::unix::fs::symlink(&real, &hop).unwrap();
+    std::os::unix::fs::symlink("hop.db", &chained).unwrap();
+    assert!(!real.exists() && fs::symlink_metadata(&alias).is_ok());
+    for input in [&alias, &chained] {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut name = real.clone().into_os_string();
+            name.push(suffix);
+            let dest = PathBuf::from(name);
+            let out = coverage_dbs(&[input], &["--json", "-o", dest.to_str().unwrap()]);
+            let label = format!("{} -> real.db{suffix}", input.display());
+            assert_eq!(code(&out), 1, "{label}: {}", stderr(&out));
+            assert!(
+                stderr(&out).contains("protected input"),
+                "{label}: refused for another reason: {}",
+                stderr(&out)
+            );
+            assert!(
+                fs::symlink_metadata(&dest).is_err(),
+                "{label}: created {}",
+                dest.display()
+            );
+        }
+    }
+    // A loop reserves its own names and terminates.
+    let loop_a = dir.join("loop-a.db");
+    let loop_b = dir.join("loop-b.db");
+    std::os::unix::fs::symlink("loop-b.db", &loop_a).unwrap();
+    std::os::unix::fs::symlink("loop-a.db", &loop_b).unwrap();
+    let dest = dir.join("elsewhere.json");
+    let out = coverage_dbs(&[&loop_a], &["--json", "-o", dest.to_str().unwrap()]);
+    assert_ne!(
+        code(&out),
+        1,
+        "a loop must not block an unrelated output: {}",
+        stderr(&out)
+    );
+}
+
 /// A pre-v1.0.1 index recorded only lossy names (#105, #107): such rows
 /// are unknown content with their own reason, never counted as copies.
 #[test]
