@@ -18,6 +18,7 @@ fn entry(id: i64, path: &[u8], content: Option<&[u8]>) -> Entry {
         mode: Some(0o644),
         content_hash: content.map(|b| *blake3::hash(b).as_bytes()),
         flags: 0,
+        kind: None,
     }
 }
 

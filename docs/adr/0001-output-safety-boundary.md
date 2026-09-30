@@ -69,3 +69,18 @@ One module, `src/outpath.rs`, owns destination safety:
   runs may leave debris there, and a later run with the same pid may
   clear it. Sidecar debris of a replaced index is removed at promote
   time (ownership was verified before the build).
+
+## Addendum (2026-09-27, #98)
+
+`ProtectedSet` can also protect an input by **name**: `reserve_name`,
+`add_input_file` and `add_input_db` (the file plus its `-wal`, `-shm` and
+`-journal` names). Identity checks only see files that exist; a report
+written at a missing index's path, an unplugged archive's recorded path, or
+a sidecar name SQLite has not created yet would later be taken for that
+input. Each input is reserved under the given spelling and under the file
+it resolves to, since SQLite names sidecars after the resolved file (the
+reader's `pending_sidecars` checks both). Names are compared after
+canonicalizing the parent directory (or
+normalizing it lexically when it does not exist), so another spelling of
+the same name is caught. `coverage -o` uses them; the other write paths
+are unchanged.

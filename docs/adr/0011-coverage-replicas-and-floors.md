@@ -1,6 +1,6 @@
 # ADR 0011 — Coverage replicas and minimum-copy floors
 
-Date: 2026-09-26 · Status: proposed · Issues: #95 and #96 (children of #40)
+Date: 2026-09-26 · Status: proposed · Issues: #95, #96, #97 and #98 (children of #40)
 
 ## Context
 
@@ -100,11 +100,13 @@ and writes nothing beside any of them.
     holds reads as an unknown lower bound (`AtLeast(0)`), never as zero
     copies. An index the loader refuses (missing, pending journal, WAL
     mode, multiply linked, busy, changed during the read, unreadable,
-    including a pre-v1.0.1 layout without `path_raw`) or finds incompatible
+    or a pre-#63 index holding sparse rows) or finds incompatible
     (another schema, hash algorithm or identity) is `Unavailable`, with the
     loader's reason and no rows. An unknown entry type, or a metadata-only
     index whose row carries a hash, also makes it `Unavailable`: refused
-    rather than guessed.
+    rather than guessed. A pre-v1.0.1 index without `path_raw` is read
+    (#107): a name it recorded only as a lossy rendering is unknown content
+    (`legacy_name_uncertain`), never a copy.
 11. Trust starts from the same reading: an unusable index is `db-missing`, an
     offline or unreadable source is `archive-missing`, a source whose stat
     differs from the index is `stale-index`, an incomplete index is
@@ -131,18 +133,65 @@ and writes nothing beside any of them.
     lists them in. The master stores no protected/reference role yet, so
     the caller passes protected source ids to the floors step.
 
-## Open decisions
+**Command and report (#98).** `backupsage coverage` loads as in rules 8–13
+and renders the floors result.
 
-- **Kind and path scope filters.** #96 lists kind and path exclusions. Coverage
-  rows carry no kind, and #98 defines the command's filters "consistent with
-  `dedup`". These filters are left to #98; only size and empty-content scope
-  exists here.
+14. The JSON report is `version` 1, additive-only. Every list is sorted by
+    the report itself on an explicit key, whatever order the engines or the
+    registry handed it: sources and per-group presence by source id; groups
+    and out-of-scope groups by content hash; copies, aliases, unknown-content
+    rows and excluded rows by (source id, raw path bytes, file id). A
+    master assigns source ids in registration order, so registering the
+    same sources in another order changes the ids and nothing else. The
+    terminal text lists the same rows in the same order: the groups that
+    do not meet the floor are one list in content-hash order, each line
+    naming its verdict (below floor or inconclusive), never regrouped by
+    verdict. It lists every unknown-content row and counts the groups that
+    meet the floor.
+15. Every summary total is counted from the rows the report emits, after
+    filtering. `coverage_state` is `complete` only when every source is a
+    complete, `ok` source, no emitted group is inconclusive and no emitted
+    row's content is unknown; anything else is `inconclusive` and exits 2.
+    Content below the floor is a finding and exits 0 when all else is
+    known.
+16. Scope filters follow `dedup`. `--archive` chooses the sources the
+    question is about. `--min-size` and `--include-empty` put content out
+    of scope by size (rule 5). `--kind` (the indexer's recorded kind of
+    each row, `f.kind = ?`), `--ext` (ASCII case folded, `lower(path)
+    LIKE '%.ext'`) and `--path-glob` (SQLite `GLOB` over the display path,
+    evaluated by SQLite) choose which content is reported, never which
+    copies count. They combine on one row, as dedup's `WHERE` clause does.
+    Content is reported, with every copy, when any of its copies or
+    aliases matches; unknown-content and excluded rows are reported when
+    they match themselves. `dedup` accepts any `--kind` and finds nothing
+    for a misspelt one; `coverage` refuses a kind outside dedup's
+    documented set (`image`, `raw`, `video`, `text`, `binary`), since
+    "nothing below the floor" would read as complete coverage. Filtering rows before grouping
+    would make a renamed copy vanish and could turn a safe group into a
+    false only-copy.
+17. `--protected` names protected/reference sources (rule 7) by id, label
+    or index path, among the chosen sources. The master stores no such role
+    yet.
+18. Terminal text passes every untrusted string (labels, paths, source
+    paths, note details, filter values) through the central sanitizer;
+    a lossy display path is followed by its raw bytes in hex. `-o` writes
+    through the output-safety boundary (ADR 0001): a new file only, never
+    over an existing one, and never onto or inside anything the run read:
+    the master, every index and its sidecars, every source archive, and
+    every directory source's whole tree. Inputs are protected by name as
+    well as by identity, so a name is refused even when nothing exists
+    there: a missing index, an unplugged archive's recorded path, and the
+    `-wal`, `-shm` and `-journal` names beside the master and every index,
+    under both the given spelling and the file it resolves to (SQLite
+    names sidecars after the resolved file, and the reader checks both).
+    A report written there would be taken for that input, or would make
+    the index look in use.
 
 ## Consequences
 
 Rules 8–13 map every registry state; a new registry status must be added to
 rule 11 before the loader will accept it. A stored protected/reference role
-needs a master change and belongs with #98's command options. Consumers
+still needs a master change; until then `--protected` supplies it per run. Consumers
 must render `inconclusive` distinctly from `below_floor` and must show
 untrusted copies.
 

@@ -8,6 +8,7 @@ pub mod borg;
 mod borg_guard;
 pub mod coverage;
 pub mod coverage_input;
+pub mod coverage_report;
 pub mod dedup;
 pub mod diff;
 pub mod diff_input;

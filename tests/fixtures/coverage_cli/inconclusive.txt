@@ -1,0 +1,54 @@
+sources:
+  1 a.tar [ok · complete]
+    index <TMP>/a.tar.db
+    source <TMP>/a.tar (tar)
+    source_stat_matches: size and mtime match the index; the source was not re-hashed
+  2 b.tar [archive-missing · unreachable · not counted]
+    index <TMP>/b.tar.db
+    source <TMP>/b.tar (tar)
+    source_offline: the source is not reachable
+    source_unverified: the source's presence was not established (Offline)
+  3 c-dir [ok · complete]
+    index <TMP>/c-dir.db
+    source <TMP>/c-dir (dir)
+    source_directory_unverified: a directory's own stat does not reflect changes to the files inside it
+  4 d.tar [db-missing · unavailable · not counted]
+    index <TMP>/d.tar.db
+    index_missing: no index file at this path
+  5 e.tar [ok · complete]
+    index <TMP>/e.tar.db
+    source <TMP>/e.tar (tar)
+    source_stat_matches: size and mtime match the index; the source was not re-hashed
+floor 2 trusted copies · empty content out of scope
+coverage: inconclusive
+
+not meeting the floor (4: 0 below the floor · 4 inconclusive):
+  inconclusive · b3:05c69b9630337a40c7fb3cf1a02ac1aeb8d0ff7591aaf0214940c7cb934c7a58 · 14 B · 1 trusted of 2 · 3 source(s) unknown
+    2 b.tar  blob.dat  [archive-missing · not counted]
+    3 c-dir  blob-copy.txt  [ok]
+    unknown in 2 b.tar: source_unreachable
+    unknown in 4 d.tar: source_unavailable
+    unknown in 5 e.tar: unhashed_rows_may_match
+  inconclusive · b3:51eeb1cbc4bc160313ef1e9b4e3415d9946fddb5dac4a9f5170a0ba4519db0c5 · 9 B · 1 trusted of 2 · 3 source(s) unknown
+    1 a.tar  a-only.txt  [ok]
+    unknown in 2 b.tar: source_unreachable
+    unknown in 4 d.tar: source_unavailable
+    unknown in 5 e.tar: unhashed_rows_may_match
+  inconclusive · b3:a6cc38792450f37fd25365c1d11869ed3eb729c7ecf477c4ff1d8946450f26ce · 17 B · 1 trusted of 2 · 3 source(s) unknown
+    1 a.tar  dup.txt  [ok]
+    unknown in 2 b.tar: source_unreachable
+    unknown in 4 d.tar: source_unavailable
+    unknown in 5 e.tar: unhashed_rows_may_match
+  inconclusive · b3:c755b439b737d05fbf712f4c172ec074d4cc740f13b28e5eca7e7d4ae74b28f4 · 19 B · 0 trusted of 2 · 3 source(s) unknown
+    2 b.tar  b-�.bin [bytes 622dfe2e62696e]  [archive-missing · not counted]
+    unknown in 2 b.tar: source_unreachable
+    unknown in 4 d.tar: source_unavailable
+    unknown in 5 e.tar: unhashed_rows_may_match
+
+unknown content (1):
+  5 e.tar  xattred.txt  [pax_unparsed]
+
+6 group(s) · 2 meet the floor · 0 below the floor · 4 inconclusive · 0 only-copy · 0 protected replica(s)
+not judged: 1 out-of-scope group(s) · 1 unknown-content row(s) · 1 shadowed · 2 symlink · 0 unmatched hardlink · 3 hardlink alias(es)
+note: 2 source(s) are not complete, ok sources; their copies may be listed but not counted
+note: this reads the indexes; it does not re-hash any source.

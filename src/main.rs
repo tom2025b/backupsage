@@ -3,8 +3,9 @@
 //! Entry point: parse the CLI, dispatch to the library, render results.
 //!
 //! Exit codes: 0 ok · 1 error · 2 completed but with skipped archives
-//! (offline / v2-limited / incomplete), or a `diff` whose comparison is not
-//! complete — scripts can rely on this.
+//! (offline / v2-limited / incomplete), a `diff` whose comparison is not
+//! complete, or a `coverage` report that is not complete (a degraded source
+//! or an unknown result) — scripts can rely on this.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -288,6 +289,65 @@ fn run() -> Result<i32> {
             searcher::finish_index(conn, &db_path)?;
             print!("{rendered}");
             Ok(0)
+        }
+
+        Commands::Coverage(args) => {
+            use backupsage::coverage_report::{self, CoverageInput, CoverageScope};
+            let scope = CoverageScope {
+                floor: backupsage::floors::FloorParams {
+                    min_copies: args.min_copies,
+                    min_size: args.min_size,
+                    include_empty: args.include_empty,
+                },
+                exts: args.ext.clone(),
+                path_glob: args.path_glob.clone(),
+                kind: args.kind.clone(),
+            };
+            let input = if args.dbs.is_empty() {
+                CoverageInput::Master(&master_path)
+            } else {
+                CoverageInput::Indexes(&args.dbs)
+            };
+            let run = coverage_report::run(input, &args.archives, &args.protected, &scope)?;
+            let rendered = if args.json {
+                run.report.to_json()?
+            } else {
+                render_coverage(&run.report)
+            };
+            match &args.output {
+                Some(path) => {
+                    // Everything coverage read is protected from the report
+                    // write: the master and every index (with sidecars), and
+                    // every source archive or directory tree (ADR 0001).
+                    // Names are reserved even when nothing exists there: a
+                    // missing index or archive, or a sidecar SQLite has not
+                    // created yet, must never become the report.
+                    let mut protected = backupsage::outpath::ProtectedSet::new();
+                    if args.dbs.is_empty() {
+                        protected.add_input_db(&master_path);
+                    }
+                    for s in &run.loaded.sources {
+                        protected.add_input_db(&s.db_path);
+                        if let Some(source) = &s.source {
+                            let source = std::path::Path::new(source);
+                            if s.source_type.as_deref() == Some("dir") {
+                                protected.reserve_name(source);
+                                protected.add_dir_tree(source);
+                            } else {
+                                protected.add_input_file(source);
+                            }
+                        }
+                    }
+                    backupsage::outpath::write_new_file(path, rendered.as_bytes(), &protected)
+                        .context("coverage report not written")?;
+                    eprintln!(
+                        "report written to {}",
+                        sanitize(&path.display().to_string())
+                    );
+                }
+                None => print!("{rendered}"),
+            }
+            Ok(if run.report.is_complete() { 0 } else { 2 })
         }
 
         Commands::Diff(args) => {
@@ -944,6 +1004,212 @@ fn render_diff(doc: &DiffDocument) -> String {
     let _ = writeln!(
         out,
         "note: this compares the indexed snapshots; it does not re-read either source."
+    );
+    out
+}
+
+/// Sanitized display path, plus the raw bytes when the display is lossy.
+fn shown_path(path: &str, path_bytes: &str) -> String {
+    let shown = sanitize(path).into_owned();
+    if backupsage::report::to_hex(path.as_bytes()) == path_bytes {
+        shown
+    } else {
+        format!("{shown} [bytes {path_bytes}]")
+    }
+}
+
+/// Terminal rendering of `coverage`. Deterministic plain lines in the
+/// report's own order; every untrusted string is sanitized. Groups that
+/// meet the floor are counted, not listed; the JSON lists them all.
+fn render_coverage(r: &backupsage::coverage_report::CoverageReport) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let label_of: std::collections::BTreeMap<i64, &str> = r
+        .sources
+        .iter()
+        .map(|s| (s.source_id, s.label.as_str()))
+        .collect();
+    let label = |id: i64| sanitize(label_of.get(&id).copied().unwrap_or("?")).into_owned();
+
+    let _ = writeln!(out, "sources:");
+    for s in &r.sources {
+        let mut marks = vec![s.status.to_string(), s.evidence.to_string()];
+        if !s.counts_toward_floor {
+            marks.push("not counted".into());
+        }
+        if s.protected {
+            marks.push("protected".into());
+        }
+        let _ = writeln!(
+            out,
+            "  {} {} [{}]",
+            s.source_id,
+            sanitize(&s.label),
+            marks.join(" · ")
+        );
+        let _ = writeln!(
+            out,
+            "    index {}",
+            shown_path(&s.db_path, &s.db_path_bytes)
+        );
+        if let Some(source) = &s.source {
+            let _ = writeln!(
+                out,
+                "    source {} ({})",
+                sanitize(source),
+                sanitize(s.source_type.as_deref().unwrap_or("unknown type"))
+            );
+        }
+        for n in s.index_notes.iter().chain(&s.notes) {
+            let _ = writeln!(out, "    {}: {}", n.code, sanitize(&n.detail));
+        }
+    }
+    let p = &r.params;
+    let mut scope = vec![format!("floor {} trusted copies", p.min_copies)];
+    if p.min_size > 0 {
+        scope.push(format!("min size {}", human_bytes(p.min_size)));
+    }
+    scope.push(if p.include_empty {
+        "empty content judged".into()
+    } else {
+        "empty content out of scope".into()
+    });
+    if !p.exts.is_empty() {
+        scope.push(format!("ext {}", sanitize(&p.exts.join(","))));
+    }
+    if let Some(glob) = &p.path_glob {
+        scope.push(format!("path glob {}", sanitize(glob)));
+    }
+    if let Some(kind) = &p.kind {
+        scope.push(format!("kind {}", sanitize(kind)));
+    }
+    let _ = writeln!(out, "{}", scope.join(" · "));
+    let _ = writeln!(out, "coverage: {}", r.coverage_state);
+
+    // One list, in the report's own order (content hash), each group
+    // carrying its verdict: the terminal never reorders what the JSON
+    // orders.
+    let listed: Vec<_> = r
+        .groups
+        .iter()
+        .filter(|g| g.verdict != "meets_floor")
+        .collect();
+    if !listed.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "not meeting the floor ({}: {} below the floor · {} inconclusive):",
+            listed.len(),
+            r.summary.below_floor,
+            r.summary.inconclusive
+        );
+        for g in listed {
+            let verdict = if g.verdict == "below_floor" {
+                "below floor"
+            } else {
+                "inconclusive"
+            };
+            let mut facts = vec![
+                verdict.to_string(),
+                g.content_hash.clone(),
+                g.size
+                    .map(human_bytes)
+                    .unwrap_or_else(|| "size unknown".into()),
+                format!("{} trusted of {}", g.trusted_replicas, p.min_copies),
+            ];
+            if g.protected_replicas > 0 {
+                facts.push(format!("{} protected", g.protected_replicas));
+            }
+            if g.unknown_sources > 0 {
+                facts.push(format!("{} source(s) unknown", g.unknown_sources));
+            }
+            if g.only_copy {
+                facts.push("only copy".into());
+            }
+            let _ = writeln!(out, "  {}", facts.join(" · "));
+            for c in &g.copies {
+                let mut marks = vec![c.status.to_string()];
+                if !c.counts_toward_floor {
+                    marks.push("not counted".into());
+                }
+                if c.protected {
+                    marks.push("protected".into());
+                }
+                let _ = writeln!(
+                    out,
+                    "    {} {}  {}  [{}]",
+                    c.source_id,
+                    label(c.source_id),
+                    shown_path(&c.path, &c.path_bytes),
+                    marks.join(" · ")
+                );
+            }
+            for a in &g.aliases {
+                let _ = writeln!(
+                    out,
+                    "    {} {}  {}  [hardlink alias]",
+                    a.source_id,
+                    label(a.source_id),
+                    shown_path(&a.path, &a.path_bytes)
+                );
+            }
+            for u in g.presence.iter().filter(|u| u.state == "unknown") {
+                let _ = writeln!(
+                    out,
+                    "    unknown in {} {}: {}",
+                    u.source_id,
+                    label(u.source_id),
+                    u.reason.unwrap_or("?")
+                );
+            }
+        }
+    }
+
+    if !r.unknown_content.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "unknown content ({}):", r.unknown_content.len());
+        for u in &r.unknown_content {
+            let _ = writeln!(
+                out,
+                "  {} {}  {}  [{}]",
+                u.row.source_id,
+                label(u.row.source_id),
+                shown_path(&u.row.path, &u.row.path_bytes),
+                u.reason
+            );
+        }
+    }
+
+    let s = &r.summary;
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{} group(s) · {} meet the floor · {} below the floor · {} inconclusive · \
+         {} only-copy · {} protected replica(s)",
+        s.groups, s.meets_floor, s.below_floor, s.inconclusive, s.only_copy, s.protected_replicas
+    );
+    let _ = writeln!(
+        out,
+        "not judged: {} out-of-scope group(s) · {} unknown-content row(s) · {} shadowed · \
+         {} symlink · {} unmatched hardlink · {} hardlink alias(es)",
+        s.excluded_groups,
+        s.unknown_content_rows,
+        s.shadowed_rows,
+        s.symlink_rows,
+        s.unmatched_hardlink_rows,
+        s.hardlink_aliases
+    );
+    if s.sources_degraded > 0 {
+        let _ = writeln!(
+            out,
+            "note: {} source(s) are not complete, ok sources; their copies may be \
+             listed but not counted",
+            s.sources_degraded
+        );
+    }
+    let _ = writeln!(
+        out,
+        "note: this reads the indexes; it does not re-hash any source."
     );
     out
 }

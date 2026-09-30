@@ -1,0 +1,31 @@
+sources:
+  1 a.tar.db [ok · complete]
+    index <TMP>/a.tar.db
+    source <TMP>/a.tar (tar)
+    source_stat_matches: size and mtime match the index; the source was not re-hashed
+  2 e.tar.db [ok · complete]
+    index <TMP>/e.tar.db
+    source <TMP>/e.tar (tar)
+    source_stat_matches: size and mtime match the index; the source was not re-hashed
+floor 2 trusted copies · empty content out of scope
+coverage: inconclusive
+
+not meeting the floor (4: 3 below the floor · 1 inconclusive):
+  inconclusive · b3:51eeb1cbc4bc160313ef1e9b4e3415d9946fddb5dac4a9f5170a0ba4519db0c5 · 9 B · 1 trusted of 2 · 1 source(s) unknown
+    1 a.tar.db  a-only.txt  [ok]
+    unknown in 2 e.tar.db: unhashed_rows_may_match
+  below floor · b3:6c041a4c22becf32be0b91f3f5ae51ffa9aebd4071e3cd2218f46e2df18facf0 · 31 B · 1 trusted of 2 · only copy
+    1 a.tar.db  shared.txt  [ok]
+    1 a.tar.db  0-alias  [hardlink alias]
+    1 a.tar.db  alias-of-shared  [hardlink alias]
+  below floor · b3:9abc4b4f6d0375f2ac38be97a3902b2e55412df1174f4da1ac990a73992feaee · 31 B · 1 trusted of 2 · only copy
+    1 a.tar.db  raw-� [bytes 7261772dff]  [ok]
+  below floor · b3:a6cc38792450f37fd25365c1d11869ed3eb729c7ecf477c4ff1d8946450f26ce · 17 B · 1 trusted of 2 · only copy
+    1 a.tar.db  dup.txt  [ok]
+
+unknown content (1):
+  2 e.tar.db  nine.bin  [not_hashed]
+
+4 group(s) · 0 meet the floor · 3 below the floor · 1 inconclusive · 3 only-copy · 0 protected replica(s)
+not judged: 1 out-of-scope group(s) · 1 unknown-content row(s) · 1 shadowed · 1 symlink · 0 unmatched hardlink · 3 hardlink alias(es)
+note: this reads the indexes; it does not re-hash any source.

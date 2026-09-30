@@ -79,12 +79,17 @@ pub struct LoadedSource {
     pub label: String,
     pub db_path: PathBuf,
     pub registry_status: Option<String>,
+    /// The source path and type the index recorded, verbatim.
+    pub source: Option<String>,
+    pub source_type: Option<String>,
     pub evidence: SourceEvidence,
     pub status: SourceStatus,
     /// What the index loader established (#101), verbatim.
     pub index_notes: Vec<InputNote>,
     pub notes: Vec<LoadNote>,
     pub rows: Vec<CoverageRow>,
+    /// Each row's content kind, by file id, as the index recorded it.
+    pub kinds: BTreeMap<i64, String>,
 }
 
 /// Every source, in source-id order.
@@ -291,6 +296,11 @@ pub fn load_from_master(master_path: &Path) -> Result<LoadedCoverage> {
 /// name, with no registry status. The same index given twice is refused:
 /// it would count as two replicas.
 pub fn load_from_indexes(db_paths: &[PathBuf]) -> Result<LoadedCoverage> {
+    build(&adhoc_registry(db_paths)?)
+}
+
+/// The registry [`load_from_indexes`] builds, without loading anything.
+pub fn adhoc_registry(db_paths: &[PathBuf]) -> Result<Vec<RegistrySource>> {
     let mut seen = BTreeSet::new();
     let mut registry = Vec::new();
     for (i, path) in db_paths.iter().enumerate() {
@@ -308,7 +318,7 @@ pub fn load_from_indexes(db_paths: &[PathBuf]) -> Result<LoadedCoverage> {
             registry_status: None,
         });
     }
-    build(&registry)
+    Ok(registry)
 }
 
 // ── Mapping one index onto coverage input ───────────────────────────────────
@@ -463,6 +473,7 @@ fn map_source(
         SnapshotState::Incompatible | SnapshotState::Unavailable => SourceEvidence::Unavailable,
     };
     let mut rows = Vec::new();
+    let mut kinds = BTreeMap::new();
     if evidence != SourceEvidence::Unavailable {
         for e in &snapshot.entries {
             let entry_kind = match e.entry_type {
@@ -481,6 +492,9 @@ fn map_source(
                     break;
                 }
             };
+            if let Some(kind) = &e.kind {
+                kinds.insert(e.file_id, kind.clone());
+            }
             rows.push(CoverageRow {
                 file_id: e.file_id,
                 path_raw: e.path.clone(),
@@ -506,6 +520,7 @@ fn map_source(
     }
     if evidence == SourceEvidence::Unavailable {
         rows.clear();
+        kinds.clear();
     }
     // Rows stay proof of a copy only when the source was positively shown
     // present and readable now. Anything else (unplugged, denied, never
@@ -572,10 +587,13 @@ fn map_source(
         label: entry.label.clone(),
         db_path: entry.db_path.clone(),
         registry_status: entry.registry_status.clone(),
+        source: health.source,
+        source_type: health.source_type,
         evidence,
         status,
         index_notes: health.notes,
         notes,
         rows,
+        kinds,
     }
 }

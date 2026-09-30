@@ -537,6 +537,7 @@ fn exit_code_matrix() {
         0,
     );
     check("dedup ok (all online)", &["--master", m, "dedup"], 0);
+    check("coverage ok (all online)", &["--master", m, "coverage"], 0);
 
     // error = 1
     check(
@@ -591,6 +592,21 @@ fn exit_code_matrix() {
         &["--master", m, "dedup", "--sort", "bogus"],
         1,
     );
+    check(
+        "coverage missing master",
+        &["--master", missing_master, "coverage"],
+        1,
+    );
+    check(
+        "coverage floor of 0",
+        &["--master", m, "coverage", "--min-copies", "0"],
+        1,
+    );
+    check(
+        "coverage unknown --archive",
+        &["--master", m, "coverage", "--archive", "nope"],
+        1,
+    );
 
     // completed-with-skips = 2 (delta's index goes missing; replicas remain)
     std::fs::remove_file(&delta_db).unwrap();
@@ -600,6 +616,11 @@ fn exit_code_matrix() {
         0,
     );
     check("dedup with offline archive", &["--master", m, "dedup"], 2);
+    check(
+        "coverage with an unavailable index",
+        &["--master", m, "coverage"],
+        2,
+    );
     check(
         "search --all with offline archive",
         &["--master", m, "search", "gammaword", "--all"],

@@ -69,6 +69,72 @@ pub enum Commands {
     ///   backupsage diff old.tar.zst.db new.tar.zst.db
     ///   backupsage diff ~/Pictures.db /mnt/backup/Pictures.db --json
     Diff(DiffArgs),
+
+    /// Report which content has fewer trusted copies than a floor, read-only.
+    ///
+    /// Reads the master's registry and each source's own index; writes
+    /// nothing beside any of them. Unknown data is never counted as a
+    /// missing copy: content whose count cannot be settled is
+    /// `inconclusive`, never `below floor`. Exit 0 when every source is a
+    /// complete, ok source and nothing is inconclusive; 2 otherwise.
+    ///
+    /// Example:
+    ///   backupsage coverage --min-copies 2
+    ///   backupsage coverage --db a.tar.zst.db --db b.tar.zst.db --json -o coverage.json
+    Coverage(CoverageArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CoverageArgs {
+    /// Trusted copies wanted per content (at least 1).
+    #[arg(long, value_name = "N", default_value_t = 2)]
+    pub min_copies: usize,
+
+    /// Content smaller than this is out of scope (listed, not judged).
+    /// Accepts K/M/G.
+    #[arg(long, value_name = "SIZE", default_value = "0", value_parser = parse_size)]
+    pub min_size: u64,
+
+    /// Judge empty (0-byte) content too.
+    #[arg(long)]
+    pub include_empty: bool,
+
+    /// Only content with a path ending in one of these extensions,
+    /// comma-separated: jpg,heic,mp4. Every copy still counts.
+    #[arg(long, value_name = "EXTS", value_delimiter = ',')]
+    pub ext: Vec<String>,
+
+    /// Only content with a path matching this GLOB (e.g. "*/DCIM/*").
+    /// Every copy still counts.
+    #[arg(long, value_name = "GLOB")]
+    pub path_glob: Option<String>,
+
+    /// Only content of one kind: image, raw, video, text, binary.
+    /// Every copy still counts.
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+
+    /// Restrict to these sources (id, label or index path); repeatable.
+    #[arg(long = "archive", value_name = "ID_OR_LABEL")]
+    pub archives: Vec<String>,
+
+    /// Mark these sources protected/reference copies (id, label or index
+    /// path); repeatable. They count like any trusted copy and are shown
+    /// separately.
+    #[arg(long = "protected", value_name = "ID_OR_LABEL")]
+    pub protected: Vec<String>,
+
+    /// Ad-hoc mode: read these index files without the master. Repeatable.
+    #[arg(long = "db", value_name = "FILE")]
+    pub dbs: Vec<PathBuf>,
+
+    /// Machine-readable JSON report (version 1).
+    #[arg(long)]
+    pub json: bool,
+
+    /// Write the report to a new file instead of stdout.
+    #[arg(short = 'o', long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

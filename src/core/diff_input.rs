@@ -251,9 +251,12 @@ fn files_column(conn: &Connection, col: &str) -> rusqlite::Result<bool> {
 fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, LegacyRows)> {
     let raw_path = files_column(conn, "path_raw")?;
     let raw_target = files_column(conn, "link_target_raw")?;
+    // The content kind is read for `coverage --kind`; an index without the
+    // column reads it as NULL, which no kind filter matches.
+    let has_kind = files_column(conn, "kind")?;
     let mut stmt = conn.prepare(&format!(
         "SELECT id, path, {}, entry_type, link_target, {},
-                size, mtime_unix, mode, content_hash, flags
+                size, mtime_unix, mode, content_hash, flags, {}
          FROM files ORDER BY id",
         if raw_path { "path_raw" } else { "NULL" },
         if raw_target {
@@ -261,6 +264,7 @@ fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, 
         } else {
             "NULL"
         },
+        if has_kind { "kind" } else { "NULL" },
     ))?;
     let lossy = |text: &str| text.contains('\u{fffd}');
     let mut rows = stmt.query([])?;
@@ -311,6 +315,7 @@ fn read_rows(conn: &Connection, old_sparse_writer: bool) -> Result<(Vec<Entry>, 
                 .map(|h| <[u8; 32]>::try_from(h.as_slice()).map_err(|_| malformed("content_hash")))
                 .transpose()?,
             flags: row_flags,
+            kind: row.get(11)?,
         });
         if entries.len() == 1 {
             run_mid_read_hook(ReadPoint::BetweenRows);
