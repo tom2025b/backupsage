@@ -1194,8 +1194,11 @@ fn output_never_takes_a_sidecar_name_beside_a_symlinked_index_target() {
 /// A dangling input symlink (#106 review round 3): its missing target is
 /// where the index is read from once restored, so neither that target nor
 /// any sidecar SQLite would create beside it may become the report — also
-/// through a chain of links, relative or absolute. A symlink loop must
-/// neither hang nor unlock anything.
+/// through a chain of links, relative or absolute, however long, and
+/// through a dangling link in a PARENT component followed by `..` (#106
+/// review round 4: `via/..` must mean the parent of via's target, not of
+/// via). An input whose location cannot be established at all (a loop)
+/// fails closed: every output is refused, and nothing hangs.
 #[test]
 fn output_never_takes_the_missing_target_of_a_dangling_input_symlink() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1208,18 +1211,50 @@ fn output_never_takes_the_missing_target_of_a_dangling_input_symlink() {
     let chained = dir.join("chained.db");
     std::os::unix::fs::symlink(&real, &hop).unwrap();
     std::os::unix::fs::symlink("hop.db", &chained).unwrap();
+    // Five links, so a hop limit shorter than the chain cannot pass.
+    let long = dir.join("long.db");
+    let mut prev = long.clone();
+    for i in 1..=4 {
+        let next = dir.join(format!("l{i}.db"));
+        std::os::unix::fs::symlink(next.file_name().unwrap(), &prev).unwrap();
+        prev = next;
+    }
+    std::os::unix::fs::symlink("real.db", &prev).unwrap();
+    // T/via -> actual/missing (dangling), T/palias.db -> via/../real.db:
+    // the eventual index is T/actual/real.db, not T/real.db.
+    let t = tmp.path().join("t");
+    let actual = t.join("actual");
+    fs::create_dir_all(&actual).unwrap();
+    std::os::unix::fs::symlink("actual/missing", t.join("via")).unwrap();
+    let palias = t.join("palias.db");
+    std::os::unix::fs::symlink("via/../real.db", &palias).unwrap();
+    let pdirect = t.join("via/../real.db");
+    let preal = actual.join("real.db");
     assert!(!real.exists() && fs::symlink_metadata(&alias).is_ok());
-    for input in [&alias, &chained] {
+    let cases = [
+        (&alias, &real),
+        (&chained, &real),
+        (&long, &real),
+        (&palias, &preal),
+        (&pdirect, &preal),
+    ];
+    for (input, target) in cases {
         for suffix in ["", "-wal", "-shm", "-journal"] {
-            let mut name = real.clone().into_os_string();
+            let mut name = target.clone().into_os_string();
             name.push(suffix);
             let dest = PathBuf::from(name);
             let out = coverage_dbs(&[input], &["--json", "-o", dest.to_str().unwrap()]);
-            let label = format!("{} -> real.db{suffix}", input.display());
+            let label = format!("{} -> {}", input.display(), dest.display());
             assert_eq!(code(&out), 1, "{label}: {}", stderr(&out));
             assert!(
                 stderr(&out).contains("protected input"),
                 "{label}: refused for another reason: {}",
+                stderr(&out)
+            );
+            // Resolved and reserved by name — not merely failed closed.
+            assert!(
+                !stderr(&out).contains("cannot establish"),
+                "{label}: location not established: {}",
                 stderr(&out)
             );
             assert!(
@@ -1229,19 +1264,26 @@ fn output_never_takes_the_missing_target_of_a_dangling_input_symlink() {
             );
         }
     }
-    // A loop reserves its own names and terminates.
+    // A loop has no location to reserve: fail closed, without hanging.
     let loop_a = dir.join("loop-a.db");
     let loop_b = dir.join("loop-b.db");
     std::os::unix::fs::symlink("loop-b.db", &loop_a).unwrap();
     std::os::unix::fs::symlink("loop-a.db", &loop_b).unwrap();
     let dest = dir.join("elsewhere.json");
     let out = coverage_dbs(&[&loop_a], &["--json", "-o", dest.to_str().unwrap()]);
-    assert_ne!(
-        code(&out),
-        1,
-        "a loop must not block an unrelated output: {}",
+    assert_eq!(code(&out), 1, "loop: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot establish where protected input"),
+        "loop refused for another reason: {}",
         stderr(&out)
     );
+    assert!(
+        fs::symlink_metadata(&dest).is_err(),
+        "loop: created {}",
+        dest.display()
+    );
+    // Without -o, the same loop is just an unavailable source.
+    assert_eq!(code(&coverage_dbs(&[&loop_a], &["--json"])), 2);
 }
 
 /// A pre-v1.0.1 index recorded only lossy names (#105, #107): such rows
